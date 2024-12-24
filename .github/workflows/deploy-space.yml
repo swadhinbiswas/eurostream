@@ -1,0 +1,42 @@
+name: deploy-space
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "Dockerfile"
+      - "pyproject.toml"
+      - ".github/workflows/deploy-space.yml"
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - name: Deploy FastAPI Backend to HF Space swadhinbiswas/eurostream-api
+        run: |
+          uv run python -c "
+          import os
+          from huggingface_hub import HfApi
+          token = os.environ.get('HF_TOKEN')
+          if not token:
+              print('::error::HF_TOKEN not configured in GitHub repository secrets')
+              exit(1)
+          api = HfApi(token=token)
+          space_id = 'swadhinbiswas/eurostream-api'
+          api.create_repo(repo_id=space_id, repo_type='space', space_sdk='docker', exist_ok=True)
+          api.upload_folder(
+              folder_path='.',
+              repo_id=space_id,
+              repo_type='space',
+              ignore_patterns=['.git/**', '.venv/**', 'site/**', 'notes/**', 'assets/**', 'data/**', '**/__pycache__/**', '*.pyc']
+          )
+          print(f'Successfully deployed FastAPI backend to https://huggingface.co/spaces/{space_id}')
+          "
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
