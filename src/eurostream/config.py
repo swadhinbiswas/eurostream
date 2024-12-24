@@ -57,13 +57,13 @@ class Settings(BaseSettings):
     def _clean_bootstrap(cls, v: str | None) -> str | None:
         if not v or not isinstance(v, str):
             return v
-        raw = v.strip()
+        raw = v.strip().strip("\"' \t\r\n")
         # Handle full Service URI like https://user:pass@host:port
         if "://" in raw:
             raw = raw.split("://", 1)[1]
         if "@" in raw:
             raw = raw.split("@", 1)[1]
-        raw = raw.split("/", 1)[0].strip()
+        raw = raw.split("/", 1)[0].split("?", 1)[0].strip("\"' \t\r\n")
         return raw
 
     warehouse_path: Path = Field(
