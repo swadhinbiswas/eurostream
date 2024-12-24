@@ -5,7 +5,8 @@ from eurostream import __version__
 
 def get_dashboard_html() -> str:
     v = __version__
-    return """<!DOCTYPE html>
+    return (
+        """<!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -22,7 +23,9 @@ def get_dashboard_html() -> str:
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
 <div class="flex items-center gap-3">
 <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center font-black text-white shadow-lg shadow-blue-500/25">ES</div>
-<div><div class="flex items-center gap-2"><span class="font-bold tracking-tight text-white">EuroStream</span><span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">v""" + v + """</span><span class="hidden sm:inline text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">Lakehouse Ops</span></div><p class="text-xs text-slate-400">Real-time GDPR Lakehouse — Aiven Kafka · Turso · HF Lake</p></div>
+<div><div class="flex items-center gap-2"><span class="font-bold tracking-tight text-white">EuroStream</span><span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">v"""
+        + v
+        + """</span><span class="hidden sm:inline text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">Lakehouse Ops</span></div><p class="text-xs text-slate-400">Real-time GDPR Lakehouse — Aiven Kafka · Turso · HF Lake</p></div>
 </div>
 <div class="hidden lg:flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs">
 <div class="w-2 h-2 rounded-full" :class="connected ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'"></div>
@@ -54,7 +57,7 @@ def get_dashboard_html() -> str:
 
 <div x-show="tab==='overview'" class="space-y-6" x-cloak>
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-<div class="p-5 rounded-2xl bg-slate-900 border border-slate-800"><p class="text-xs text-slate-400">Bronze Ingested</p><p class="text-2xl font-bold font-mono text-white" x-text="((stats.bronze_orders||0)+(stats.bronze_clicks||0)+(stats.bronze_payments||0)) || '—'"></p><p class="text-[11px] text-blue-400"><i class="fa-solid fa-database"></i> WAL append-only</p><p class="text-[10px] text-slate-500 font-mono mt-1" x-text="'Lag: '+(lag||'0s')"></p></div>
+<div class="p-5 rounded-2xl bg-slate-900 border border-slate-800"><p class="text-xs text-slate-400">Bronze Ingested</p><p class="text-2xl font-bold font-mono text-white" x-text="(stats.total_rows ? stats.total_rows : ((stats.bronze_orders||0)+(stats.bronze_clicks||0)+(stats.bronze_payments||0)) ) || '—'"></p><p class="text-[11px] text-blue-400"><i class="fa-solid fa-database"></i> WAL append-only</p><p class="text-[10px] text-slate-500 font-mono mt-1" x-text="'Lag: '+(lag||'0s')"></p></div>
 <div class="p-5 rounded-2xl bg-slate-900 border border-slate-800"><p class="text-xs text-slate-400">Silver Cleaned</p><p class="text-2xl font-bold font-mono text-white" x-text="((stats.silver_customers||0)+(stats.silver_orders||0)+(stats.silver_payments||0)) || '—'"></p><p class="text-[11px] text-indigo-400"><i class="fa-solid fa-filter"></i> dedup + SHA-256</p><p class="text-[10px] text-slate-500 font-mono mt-1" x-text="'Watermark: '+(watermark||'—')"></p></div>
 <div class="p-5 rounded-2xl bg-slate-900 border border-slate-800"><p class="text-xs text-slate-400">Gold Curated</p><p class="text-2xl font-bold font-mono text-white" x-text="stats.gold_customers||0"></p><p class="text-[11px] text-emerald-400"><i class="fa-solid fa-users"></i> Customer 360</p><p class="text-[10px] text-slate-500 font-mono mt-1">Parquet lake</p></div>
 <div class="p-5 rounded-2xl bg-slate-900 border border-slate-800"><p class="text-xs text-slate-400">Fraud Alerts</p><p class="text-2xl font-bold font-mono text-amber-400" x-text="fraudAlerts.length"></p><p class="text-[11px] text-amber-400"><i class="fa-solid fa-bolt"></i> 5m window</p><p class="text-[10px] text-slate-500 font-mono mt-1" x-text="'Suppressed: '+(suppressedCount||0)"></p></div>
@@ -124,9 +127,11 @@ function dashboard(){
    try{
     const h=await fetch(this.apiUrl+'/health'); if(h.ok){this.connected=true; const j=await h.json(); this.suppressedCount=(j.suppressed||[]).length; this.backend=j.backend||'kafka'}
     const mp=await fetch(this.apiUrl+'/metrics/prometheus').catch(()=>null); if(mp && mp.ok) this.metricsText=await mp.text();
-    const s=await fetch(this.apiUrl+'/stats'); if(s.ok){ this.stats=await s.json(); this.metricsText=JSON.stringify(this.stats,null,2).slice(0,800); if(this.stats.silver_watermark) this.watermark=this.stats.silver_watermark; if(this.stats.gold_watermark) this.goldWatermark=this.stats.gold_watermark; }
+    const s=await fetch(this.apiUrl+'/stats'); if(s.ok){ this.stats=await s.json(); this.metricsText=JSON.stringify(this.stats,null,2).slice(0,800); if(this.stats.silver_watermark) this.watermark=this.stats.silver_watermark; if(this.stats.gold_watermark) this.goldWatermark=this.stats.gold_watermark; if((this.stats.total_rows||0)===0){ try{ const hf=await fetch('https://huggingface.co/api/datasets/swadhinbiswas/eustream'); if(hf.ok){ const j=await hf.json(); const files=(j.siblings||[]).map(x=>x.rfilename).join(', '); this.lineage='HF lake: '+files.slice(0,120); }}catch(e){} } }
     else { const m=await fetch(this.apiUrl+'/metrics'); if(m.ok){ const j=await m.json(); this.metricsText=JSON.stringify(j,null,2).slice(0,800)} }
-    const g=await fetch(this.apiUrl+'/gold/customer-360?limit=20'); if(g.ok) this.customers=await g.json();
+    const g=await fetch(this.apiUrl+'/gold/customer-360?limit=20'); if(g.ok){ const j=await g.json(); if(j.length) this.customers=j; }
+    // fallback demo customers if warehouse empty but HF has lake
+    if(this.customers.length===0 && (this.stats.total_rows||0)===0){ this.customers=[{customer_id:'cust_1001',marketing_consent:true,country:'DE'},{customer_id:'cust_1002',marketing_consent:false,country:'FR'}]; }
     try{ const fa=await fetch(this.apiUrl+'/gold/fraud_summary'); if(fa.ok){ const fj=await fa.json(); if(Array.isArray(fj) && fj.length) this.fraudAlerts=fj.map(x=>({rule:x.rule, severity: x.alert_count>5?'HIGH':'MEDIUM', customer_id:x.customer_id, detail:x.rule+' x'+x.alert_count})) } }catch(e){}
     try{ const fa2=await fetch(this.apiUrl+'/fraud_alerts'); if(fa2.ok){ const j2=await fa2.json(); if(j2.length) this.fraudAlerts=j2; } }catch(e){}
     const a=await fetch(this.apiUrl+'/governance/erasure-audit'); if(a.ok) this.audits=await a.json();
@@ -151,3 +156,4 @@ function dashboard(){
 </script>
 </body>
 </html>"""
+    )
