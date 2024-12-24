@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: eurostream-api
+    runtime: python
+    buildCommand: pip install uv && uv sync
+    startCommand: uv run uvicorn eurostream.api:app --host 0.0.0.0 --port 
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: EUROSTREAM_EVENT_BUS_BACKEND
+        value: sqlite
+      - key: EUROSTREAM_ERASURE_SLA_SECONDS
+        value: 60
