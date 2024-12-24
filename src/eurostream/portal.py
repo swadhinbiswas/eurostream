@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from eurostream import __version__
 
+
 def build_portal_html() -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">

@@ -123,7 +123,11 @@ def produce(
             payment.emit(customer_id=burst_customer, amount=random.uniform(900, 2000))
     if hasattr(bus, "flush"):
         bus.flush()
-    dest = settings.kafka_bootstrap_servers if settings.event_bus_backend == "kafka" else str(settings.data_dir / "events.db")
+    dest = (
+        settings.kafka_bootstrap_servers
+        if settings.event_bus_backend == "kafka"
+        else str(settings.data_dir / "events.db")
+    )
     typer.echo(f"produced {events} events per topic to {dest}")
 
 
