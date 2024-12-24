@@ -389,6 +389,8 @@ class Warehouse:
         if topic not in mapping:
             raise ValueError(f"unknown topic: {topic}")
         event_type, model = mapping[topic]
+        now = time.time()
+        batch: list[tuple[Any, ...]] = []
         for record in records:
             try:
                 payload = record.json_value()
@@ -401,11 +403,74 @@ class Warehouse:
             except Exception:  # noqa: S110, S112
                 continue
             if topic == "orders":
-                self.append_order(event)
+                batch.append(
+                    (
+                        event.event_id,
+                        event.schema_version,
+                        event.occurred_at,
+                        event.order_id,
+                        event.customer_id,
+                        event.email,
+                        event.iban,
+                        event.country,
+                        event.amount_eur,
+                        event.marketing_consent,
+                        event.currency,
+                        now,
+                    )
+                )
             elif topic == "clicks":
-                self.append_click(event)
+                batch.append(
+                    (
+                        event.event_id,
+                        event.schema_version,
+                        event.occurred_at,
+                        event.click_id,
+                        event.customer_id,
+                        event.session_id,
+                        event.ip_address,
+                        event.page,
+                        event.country,
+                        now,
+                    )
+                )
             else:
-                self.append_payment(event)
+                batch.append(
+                    (
+                        event.event_id,
+                        event.schema_version,
+                        event.occurred_at,
+                        event.payment_id,
+                        event.order_id,
+                        event.customer_id,
+                        event.iban,
+                        event.amount_eur,
+                        event.country,
+                        event.merchant_country,
+                        event.status,
+                        now,
+                    )
+                )
+
+        if not batch:
+            return
+
+        table = f"bronze.{topic}"
+        if topic == "orders":
+            self.conn.executemany(
+                "INSERT OR IGNORE INTO bronze.orders VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", batch
+            )
+        elif topic == "clicks":
+            self.conn.executemany(
+                "INSERT OR IGNORE INTO bronze.clicks VALUES (?,?,?,?,?,?,?,?,?,?)", batch
+            )
+        else:
+            self.conn.executemany(
+                "INSERT OR IGNORE INTO bronze.payments VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", batch
+            )
+
+        if self.turso:
+            self.sync_table_to_turso(table)
 
     # ---- Silver (dedup, typed, PII-masked) ----
 
