@@ -1,16 +1,32 @@
 services:
   - type: web
     name: eurostream-api
-    runtime: python
-    buildCommand: pip install uv && uv sync
-    startCommand: uv run uvicorn eurostream.api:app --host 0.0.0.0 --port 
+    env: docker
     plan: free
+    dockerfilePath: ./Dockerfile
+    dockerCommand: uvicorn eurostream.api:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.8
       - key: EUROSTREAM_EVENT_BUS_BACKEND
-        value: sqlite
-      - key: EUROSTREAM_ERASURE_SLA_SECONDS
-        value: 60
+        value: kafka
+      - key: EUROSTREAM_KAFKA_BOOTSTRAP_SERVERS
+        sync: false
+      - key: EUROSTREAM_KAFKA_USERNAME
+        sync: false
+      - key: EUROSTREAM_KAFKA_PASSWORD
+        sync: false
+      - key: EUROSTREAM_KAFKA_SECURITY_PROTOCOL
+        value: SASL_SSL
+      - key: EUROSTREAM_KAFKA_SASL_MECHANISM
+        value: SCRAM-SHA-256
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: EUROSTREAM_PII_SALT
+        sync: false
+      - key: HF_TOKEN
+        sync: false
+      - key: PYTHONUNBUFFERED
+        value: 1
