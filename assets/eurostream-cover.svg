@@ -1,0 +1,172 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="t d">
+  <title id="t">EuroStream pipeline</title>
+  <desc id="d">EU commerce events flow through an event bus into a real-time fraud engine, a medallion lakehouse with quality gates, DuckDB and Turso serving, and a six-layer GDPR Article 17 erasure cascade.</desc>
+  <defs>
+    <radialGradient id="bgGlow" cx="18%" cy="0%" r="95%">
+      <stop offset="0%" stop-color="#131E1B"/>
+      <stop offset="55%" stop-color="#0C0C10"/>
+      <stop offset="100%" stop-color="#09090B"/>
+    </radialGradient>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#1C1C23"/>
+    </pattern>
+    <linearGradient id="titleGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="60%" stop-color="#D6D6DC"/>
+      <stop offset="100%" stop-color="#9A9AA4"/>
+    </linearGradient>
+    <linearGradient id="shieldGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#34D399" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#34D399" stop-opacity="0"/>
+    </linearGradient>
+    <marker id="ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5A5A66"/>
+    </marker>
+    <style>
+      .f { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .card { fill: #121218; stroke: #2E2E37; stroke-width: 1; }
+      .card-title { fill: #ECECF1; font-size: 12.5px; font-weight: 700; letter-spacing: .5px; }
+      .sub { fill: #8C8C97; font-size: 10px; }
+      .micro { fill: #67677A; font-size: 9px; letter-spacing: 1.8px; }
+      .item { fill: #A9A9B4; font-size: 10px; }
+      .chip { fill: #17171E; stroke: #33333D; }
+      .chip-t { fill: #BCBCC7; font-size: 9.5px; }
+      .node { fill: #13131A; stroke: #34343F; }
+      .node-t { fill: #E4E4EA; font-size: 11px; font-weight: 700; }
+      .node-s { fill: #7F7F8B; font-size: 8.8px; }
+      .flow { stroke: #565663; stroke-width: 1.4; fill: none; stroke-dasharray: 5 7; animation: dash 1.15s linear infinite; }
+      .live { fill: #34D399; animation: blink 2s ease-in-out infinite; }
+      .gate { fill: #34D399; animation: blink 2.6s ease-in-out infinite; }
+      .blip { fill: #67E8F9; animation: blink 2.6s ease-in-out infinite; }
+      .stage { animation: stagePulse 7.5s linear infinite; }
+      .er { fill: #12181A; stroke: #2F4A44; animation: cascade 7.2s linear infinite; }
+      .er-t { fill: #C7D6D1; font-size: 9.5px; }
+      @keyframes dash { to { stroke-dashoffset: -24; } }
+      @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: .18; } }
+      @keyframes stagePulse { 0%, 100% { stroke: #34343F; } 8% { stroke: #67E8F9; } 22% { stroke: #34343F; } }
+      @keyframes cascade { 0%, 100% { stroke: #2F4A44; } 6% { stroke: #34D399; } 18% { stroke: #2F4A44; } }
+      @media (prefers-reduced-motion: reduce) {
+        .flow, .live, .gate, .blip, .stage, .er { animation: none; }
+      }
+    </style>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bgGlow)"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <rect x="12" y="12" width="1176" height="606" rx="22" fill="none" stroke="#24242C" stroke-width="1.2"/>
+
+  <g transform="translate(48,41) scale(1.05)">
+    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" fill="none" stroke="#E8E8EE" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="m9 12 2 2 4-4" fill="none" stroke="#34D399" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text class="f" x="84" y="62" font-size="25" font-weight="800" letter-spacing="3" fill="url(#titleGrad)">EUROSTREAM</text>
+  <text class="f sub" x="86" y="86">gdpr-native streaming lakehouse for european commerce</text>
+
+  <rect x="940" y="38" width="212" height="32" rx="16" fill="#111118" stroke="#2E2E37"/>
+  <circle class="live" cx="960" cy="54" r="3.5"/>
+  <text class="f chip-t" x="974" y="58">59 tests · mypy strict</text>
+
+  <text class="f micro" x="48" y="122">01 · INGEST &amp; SCORE</text>
+  <text class="f micro" x="48" y="292">02 · LAKEHOUSE</text>
+  <text class="f micro" x="48" y="458">03 · ERASE &amp; SERVE</text>
+
+  <rect class="card" x="48" y="132" width="328" height="118" rx="14"/>
+  <text class="f card-title" x="64" y="160">EU commerce events</text>
+  <text class="f sub" x="64" y="178">orders · clicks · payments</text>
+  <circle cx="66" cy="197" r="1.8" fill="#67E8F9"/>
+  <text class="f item" x="76" y="200">orders with line items</text>
+  <circle cx="66" cy="215" r="1.8" fill="#A78BFA"/>
+  <text class="f item" x="76" y="218">clicks with consent flags</text>
+  <circle cx="66" cy="233" r="1.8" fill="#FCD34D"/>
+  <text class="f item" x="76" y="236">payments with EU IBANs</text>
+
+  <path id="pa" class="flow" d="M380 191 H428" marker-end="url(#ah)"/>
+  <path id="pb" class="flow" d="M768 191 H818" marker-end="url(#ah)"/>
+
+  <rect class="card" x="436" y="132" width="328" height="118" rx="14"/>
+  <text class="f card-title" x="452" y="160">Event bus</text>
+  <text class="f sub" x="452" y="178">SQLite WAL locally · Aiven Kafka in production</text>
+  <text class="f item" x="452" y="200">durable append log, no shared state</text>
+  <rect class="chip" x="452" y="212" width="60" height="20" rx="10"/>
+  <text class="f chip-t" x="482" y="226" text-anchor="middle">orders</text>
+  <rect class="chip" x="520" y="212" width="60" height="20" rx="10"/>
+  <text class="f chip-t" x="550" y="226" text-anchor="middle">clicks</text>
+  <rect class="chip" x="588" y="212" width="70" height="20" rx="10"/>
+  <text class="f chip-t" x="623" y="226" text-anchor="middle">payments</text>
+  <rect class="chip" x="666" y="212" width="58" height="20" rx="10"/>
+  <text class="f chip-t" x="695" y="226" text-anchor="middle">alerts</text>
+
+  <rect class="card" x="824" y="132" width="328" height="118" rx="14"/>
+  <text class="f card-title" x="840" y="160">Fraud engine</text>
+  <text class="f sub" x="840" y="178">velocity · amount z-score · geo mismatch</text>
+  <circle cx="842" cy="197" r="1.8" fill="#67E8F9"/>
+  <text class="f item" x="852" y="200">tumbling windows, sample variance</text>
+  <circle cx="842" cy="215" r="1.8" fill="#67E8F9"/>
+  <text class="f item" x="852" y="218">one alert per window, no flooding</text>
+  <circle cx="842" cy="233" r="1.8" fill="#34D399"/>
+  <text class="f item" x="852" y="236">erased ids dropped before scoring</text>
+
+  <path id="pc" class="flow" d="M988 250 V296" marker-end="url(#ah)"/>
+
+  <rect class="card" x="48" y="302" width="1104" height="128" rx="14"/>
+  <text class="f card-title" x="64" y="330">Medallion lakehouse</text>
+  <text class="f sub" x="1136" y="330" text-anchor="end">watermarked incremental merges · de-identified export</text>
+
+  <rect class="node stage" x="60" y="348" width="246" height="62" rx="10" style="animation-delay:0s"/>
+  <text class="f node-t" x="183" y="376" text-anchor="middle">Bronze</text>
+  <text class="f node-s" x="183" y="392" text-anchor="middle">raw events, PII internal</text>
+
+  <rect class="node stage" x="338" y="348" width="246" height="62" rx="10" style="animation-delay:1.9s"/>
+  <text class="f node-t" x="461" y="376" text-anchor="middle">Silver</text>
+  <text class="f node-s" x="461" y="392" text-anchor="middle">salted SHA-256 pseudonyms</text>
+
+  <rect class="node stage" x="616" y="348" width="246" height="62" rx="10" style="animation-delay:3.8s"/>
+  <text class="f node-t" x="739" y="376" text-anchor="middle">Gold</text>
+  <text class="f node-s" x="739" y="392" text-anchor="middle">consent-gated marts</text>
+
+  <rect class="node stage" x="894" y="348" width="246" height="62" rx="10" style="animation-delay:5.7s"/>
+  <text class="f node-t" x="1017" y="376" text-anchor="middle">Quality gates</text>
+  <text class="f node-s" x="1017" y="392" text-anchor="middle">6 integrity assertions</text>
+
+  <path class="flow" d="M310 379 H332" marker-end="url(#ah)"/>
+  <path class="flow" d="M588 379 H610" marker-end="url(#ah)"/>
+  <path class="flow" d="M866 379 H888" marker-end="url(#ah)"/>
+  <circle r="3" fill="#67E8F9" opacity="0.9"><animateMotion dur="7.6s" repeatCount="indefinite"><mpath href="#pl"/></animateMotion></circle>
+  <path id="pl" d="M72 379 H1128" fill="none" stroke="none"/>
+
+  <path id="pd" class="flow" d="M600 434 V462" marker-end="url(#ah)"/>
+  <path id="pe" class="flow" d="M672 522 H718" marker-end="url(#ah)"/>
+
+  <rect class="card" x="48" y="468" width="620" height="110" rx="14"/>
+  <text class="f card-title" x="64" y="496">Article 17 erasure cascade</text>
+  <rect class="er" x="64" y="504" width="184" height="24" rx="12" style="animation-delay:0s"/>
+  <text class="f er-t" x="156" y="520" text-anchor="middle">1 · Suppress</text>
+  <rect class="er" x="258" y="504" width="184" height="24" rx="12" style="animation-delay:1.2s"/>
+  <text class="f er-t" x="350" y="520" text-anchor="middle">2 · Bronze mask</text>
+  <rect class="er" x="452" y="504" width="184" height="24" rx="12" style="animation-delay:2.4s"/>
+  <text class="f er-t" x="544" y="520" text-anchor="middle">3 · Silver delete</text>
+  <rect class="er" x="64" y="534" width="184" height="24" rx="12" style="animation-delay:3.6s"/>
+  <text class="f er-t" x="156" y="550" text-anchor="middle">4 · Gold delete</text>
+  <rect class="er" x="258" y="534" width="184" height="24" rx="12" style="animation-delay:4.8s"/>
+  <text class="f er-t" x="350" y="550" text-anchor="middle">5 · Memory purge</text>
+  <rect class="er" x="452" y="534" width="184" height="24" rx="12" style="animation-delay:6s"/>
+  <text class="f er-t" x="544" y="550" text-anchor="middle">6 · Lake snapshot</text>
+  <text class="f sub" x="64" y="570">synchronous · verified · cryptographic audit log</text>
+
+  <rect class="card" x="724" y="468" width="428" height="110" rx="14"/>
+  <text class="f card-title" x="740" y="496">Serving &amp; API</text>
+  <rect class="chip" x="740" y="504" width="107" height="22" rx="11"/>
+  <text class="f chip-t" x="793" y="519" text-anchor="middle">DuckDB embedded</text>
+  <rect class="chip" x="855" y="504" width="85" height="22" rx="11"/>
+  <text class="f chip-t" x="897" y="519" text-anchor="middle">Turso cloud</text>
+  <rect class="chip" x="948" y="504" width="107" height="22" rx="11"/>
+  <text class="f chip-t" x="1001" y="519" text-anchor="middle">HF parquet lake</text>
+  <text class="f sub" x="740" y="548">FastAPI dashboard · five live views</text>
+  <text class="f sub" x="740" y="564">Prometheus metrics for Grafana scraping</text>
+
+  <circle r="2.6" fill="#67E8F9"><animateMotion dur="1.5s" repeatCount="indefinite"><mpath href="#pa"/></animateMotion></circle>
+  <circle r="2.6" fill="#67E8F9"><animateMotion dur="1.5s" repeatCount="indefinite" begin="0.4s"><mpath href="#pb"/></animateMotion></circle>
+  <circle r="2.6" fill="#67E8F9"><animateMotion dur="1.5s" repeatCount="indefinite" begin="0.2s"><mpath href="#pc"/></animateMotion></circle>
+  <circle r="2.6" fill="#67E8F9"><animateMotion dur="1.5s" repeatCount="indefinite" begin="0.1s"><mpath href="#pd"/></animateMotion></circle>
+  <circle r="2.6" fill="#67E8F9"><animateMotion dur="1.5s" repeatCount="indefinite" begin="0.6s"><mpath href="#pe"/></animateMotion></circle>
+</svg>
