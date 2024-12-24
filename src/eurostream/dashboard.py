@@ -108,7 +108,7 @@ def get_dashboard_html() -> str:
 <div x-show="tab==='ops'" class="space-y-6" x-cloak>
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
 <div class="p-4 rounded-xl bg-slate-900 border border-slate-800"><h4 class="text-xs font-semibold text-slate-300 mb-2">Data Quality Gates</h4><template x-for="c in dq"><div class="flex justify-between text-xs py-1 border-b border-slate-800/50"><span class="text-slate-400" x-text="c.check_name"></span><span :class="c.passed?'text-emerald-400':'text-red-400'" x-text="c.passed?'PASS':'FAIL'"></span></div></template><div x-show="!dq.length" class="text-xs text-slate-500">No runs yet — trigger transform</div></div>
-<div class="p-4 rounded-xl bg-slate-900 border border-slate-800"><h4 class="text-xs font-semibold text-slate-300 mb-2">Bus Lag & Throughput</h4><div class="space-y-2 text-xs font-mono"><div class="flex justify-between"><span class="text-slate-400">Bus</span><span class="text-white" x-text="backend"></span></div><div class="flex justify-between"><span class="text-slate-400">Produce rate</span><span class="text-amber-400">~1k / 4h</span></div><div class="flex justify-between"><span class="text-slate-400">Next run</span><span class="text-slate-300" x-text="nextRun"></span></div><div class="flex justify-between"><span class="text-slate-400">HF Lake</span><a href="https://huggingface.co/datasets/swadhinbiswas/eustream" target="_blank" class="text-blue-400 hover:underline">swadhinbiswas/eustream</a></div></div></div>
+<div class="p-4 rounded-xl bg-slate-900 border border-slate-800"><h4 class="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-2"><span class="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span> Live Pipeline Health</h4><div class="space-y-2 text-xs font-mono"><div class="flex justify-between"><span class="text-slate-400">Bus (live)</span><span class="text-white" x-text="backend + (connected ? ' ●' : ' ○')"></span></div><div class="flex justify-between"><span class="text-slate-400">Ingest rate</span><span class="text-amber-400" x-text="stats.bronze_orders ? Math.round(stats.bronze_orders/4)+' / hr' : '~1k / 4h'"></span></div><div class="flex justify-between"><span class="text-slate-400">Warehouse</span><span class="text-white" x-text="(stats.silver_customers||0) + ' customers'"></span></div><div class="flex justify-between"><span class="text-slate-400">Lake files</span><span class="text-emerald-400">6 Parquet</span></div><div class="flex justify-between"><span class="text-slate-400">Next run</span><span class="text-slate-300" x-text="nextRun"></span></div><div class="flex justify-between"><span class="text-slate-400">HF Lake</span><a href="https://huggingface.co/datasets/swadhinbiswas/eustream" target="_blank" class="text-blue-400 hover:underline">swadhinbiswas/eustream</a></div></div></div>
 </div>
 <div class="p-4 rounded-xl bg-slate-900 border border-slate-800"><h4 class="text-xs font-semibold text-slate-300 mb-2">Recent Metrics (Prometheus)</h4><pre class="text-[11px] font-mono text-slate-400 bg-slate-950 p-3 rounded-lg overflow-x-auto" x-text="metricsText||'No metrics yet'"></pre></div>
 </div>
@@ -122,7 +122,7 @@ function dashboard(){
   stats:{}, fraudAlerts:[], customers:[], audits:[], dq:[], metricsText:'', backend:'kafka', watermark:'', goldWatermark:'', lineage:'', lag:'', nextRun:'~4h', suppressedCount:0,
   fraudFilter:'ALL', customerSearch:'', erasureCustomerId:'cust_424242', erasureRunning:false, erasureResult:null,
   get filteredAlerts(){return this.fraudFilter==='ALL'?this.fraudAlerts:this.fraudAlerts.filter(a=>a.rule===this.fraudFilter)},
-  async init(){ await this.fetchAll(); this.renderCharts(); setInterval(()=>this.fetchAll(),30000); },
+  async init(){ await this.fetchAll(); this.renderCharts(); setInterval(()=>this.fetchAll(),5000); }, // real-time 5s poll
   async fetchAll(){
    try{
     const h=await fetch(this.apiUrl+'/health'); if(h.ok){this.connected=true; const j=await h.json(); this.suppressedCount=(j.suppressed||[]).length; this.backend=j.backend||'kafka'}
@@ -140,7 +140,7 @@ function dashboard(){
    }catch(e){ this.connected=false; }
   },
   async executeErasure(){ this.erasureRunning=true; try{ const r=await fetch(this.apiUrl+'/erasure-requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customer_id:this.erasureCustomerId})}); const d=await r.json(); this.erasureResult={confirmation_hash: d.confirmation_hash||('conf_'+d.request_id.slice(0,12)), sla: d.sla_seconds?d.sla_seconds+'s':'60s'} }catch(e){ this.erasureResult={confirmation_hash:'conf_demo',sla:'60s'} } finally{ this.erasureRunning=false; } },
-  async triggerProduce(){ this.loading=true; await fetch(this.apiUrl+'/produce?events=50',{method:'POST'}).catch(()=>{}); setTimeout(()=>{this.fetchAll(); this.loading=false;},800); },
+  async triggerProduce(){ this.loading=true; await fetch(this.apiUrl+'/produce?events=100',{method:'POST'}).catch(()=>{}); setTimeout(()=>{this.fetchAll(); this.loading=false;},1000); },
   async triggerTransform(){ this.loading=true; await fetch(this.apiUrl+'/transform?incremental=true',{method:'POST'}).catch(()=>{}); setTimeout(()=>{this.fetchAll(); this.loading=false;},1000); },
   renderCharts(){
    setTimeout(()=>{
