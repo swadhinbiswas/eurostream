@@ -53,6 +53,8 @@ jobs:
           EUROSTREAM_KAFKA_BOOTSTRAP_SERVERS: ${{ secrets.KAFKA_BOOTSTRAP_SERVERS }}
           EUROSTREAM_KAFKA_USERNAME: ${{ secrets.KAFKA_USERNAME }}
           EUROSTREAM_KAFKA_PASSWORD: ${{ secrets.KAFKA_PASSWORD }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
       - name: Stream fraud scoring (real-time)
         run: uv run eurostream stream --max-events 3000
         env:
@@ -60,12 +62,23 @@ jobs:
           EUROSTREAM_KAFKA_BOOTSTRAP_SERVERS: ${{ secrets.KAFKA_BOOTSTRAP_SERVERS }}
           EUROSTREAM_KAFKA_USERNAME: ${{ secrets.KAFKA_USERNAME }}
           EUROSTREAM_KAFKA_PASSWORD: ${{ secrets.KAFKA_PASSWORD }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
       - name: Transform --incremental
         run: uv run eurostream transform --incremental
         env:
+          EUROSTREAM_EVENT_BUS_BACKEND: ${{ steps.probe.outputs.backend }}
+          EUROSTREAM_KAFKA_BOOTSTRAP_SERVERS: ${{ secrets.KAFKA_BOOTSTRAP_SERVERS }}
+          EUROSTREAM_KAFKA_USERNAME: ${{ secrets.KAFKA_USERNAME }}
+          EUROSTREAM_KAFKA_PASSWORD: ${{ secrets.KAFKA_PASSWORD }}
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      - name: Sync all tables to Turso libSQL
+        run: uv run eurostream sync-turso
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
       - name: Push to HF swadhinbiswas/eustream
         run: |
           uv run python -c "

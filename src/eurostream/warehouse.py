@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -10,7 +12,10 @@ import duckdb
 from eurostream.bus import Record
 from eurostream.config import PII_SALT
 from eurostream.models import OrderPlaced, PageClick, PaymentProcessed
+from eurostream.turso import TursoClient
 from eurostream.types import Manifest, Row
+
+logger = logging.getLogger(__name__)
 
 BRONZE_SCHEMA = "bronze"
 SILVER_SCHEMA = "silver"
@@ -102,47 +107,43 @@ CREATE TABLE IF NOT EXISTS governance.lineage_events (
 
 
 class Warehouse:
-    """DuckDB-backed medallion warehouse. DuckDB keeps the whole stack local
-    and portable; the SQL is standard enough to target a managed warehouse
-    (Snowflake/BigQuery) by swapping the connection."""
+    """DuckDB-backed medallion warehouse with optional Turso (libSQL) dual-write
+    and sync. DuckDB keeps the whole stack fast, local, and portable; Turso
+    provides a shared cloud persistence layer for serverless / multi-container runs."""
 
-    def __init__(self, db_path: Path | str) -> None:
-        import os
-
+    def __init__(
+        self,
+        db_path: Path | str,
+        turso_url: str | None = None,
+        turso_token: str | None = None,
+    ) -> None:
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         # Primary: DuckDB file (always, for Parquet lake + local dev)
         self.conn = duckdb.connect(str(self._path))
         self._init_schema()
-        # Secondary: Turso libSQL for EU-reader persistence (Render + GitHub share same DB)
-        self.turso = None
-        turso_url = os.getenv("TURSO_DATABASE_URL")
-        turso_token = os.getenv("TURSO_AUTH_TOKEN")
-        if turso_url and turso_token:
-            try:
+
+        # Secondary: Turso libSQL for cloud persistence (Render + GitHub share same DB)
+        self.turso: TursoClient | None = None
+        raw_url = (
+            turso_url
+            or os.getenv("TURSO_DATABASE_URL")
+            or os.getenv("EUROSTREAM_TURSO_DATABASE_URL")
+        )
+        raw_token = (
+            turso_token or os.getenv("TURSO_AUTH_TOKEN") or os.getenv("EUROSTREAM_TURSO_AUTH_TOKEN")
+        )
+        if raw_url and raw_token:
+            clean_url = str(raw_url).strip().strip("\"' \t\r\n")
+            clean_token = str(raw_token).strip().strip("\"' \t\r\n")
+            if clean_url and clean_token:
                 try:
-                    import libsql
-                except ImportError:
-                    import libsql_experimental as libsql
-                self.turso = libsql.connect(database=turso_url, authToken=turso_token)
-                # Mirror schema to Turso (SQLite dialect, best-effort)
-                for ddl in (CREATE_BRONZE, CREATE_SILVER, CREATE_GOLD, CREATE_GOVERNANCE):
-                    try:
-                        # Turso is SQLite — strip DuckDB-specific syntax
-                        _ = (
-                            ddl.replace("CREATE SCHEMA IF NOT EXISTS bronze;", "")
-                            .replace("CREATE SCHEMA IF NOT EXISTS silver;", "")
-                            .replace("CREATE SCHEMA IF NOT EXISTS gold;", "")
-                            .replace("CREATE SCHEMA IF NOT EXISTS governance;", "")
-                        )
-                        # Already created via _init_schema loop, just ensure tables
-                        pass
-                    except Exception:  # noqa: S110, S112
-                        pass
-                print(f"Turso connected: {turso_url[:30]}...")
-            except Exception as e:
-                print(f"Turso connect failed (fallback to DuckDB only): {e}")
-                self.turso = None
+                    self.turso = TursoClient(clean_url, clean_token)
+                    self.turso.init_schema()
+                    logger.info("Turso libSQL connected & schemas verified: %s", clean_url[:35])
+                except Exception as e:
+                    logger.warning("Turso connect failed (falling back to DuckDB only): %s", e)
+                    self.turso = None
 
     def _init_schema(self) -> None:
         for schema in (BRONZE_SCHEMA, SILVER_SCHEMA, GOLD_SCHEMA, GOVERNANCE_SCHEMA):
@@ -151,11 +152,92 @@ class Warehouse:
             self.conn.execute(ddl)
 
     def close(self) -> None:
+        if self.turso:
+            try:
+                self.turso.close()
+            except Exception as e:
+                logger.debug("Turso close error: %s", e)
         self.conn.close()
+
+    def sync_table_to_turso(self, table: str) -> None:
+        """Syncs all rows of a DuckDB table to Turso via batch INSERT OR REPLACE."""
+        if not self.turso:
+            return
+        try:
+            rows = self.conn.execute(f"SELECT * FROM {table}").fetchall()  # noqa: S608
+            if not rows:
+                return
+            desc = self.conn.execute(f"SELECT * FROM {table} LIMIT 0").description  # noqa: S608
+            cols = [d[0] for d in desc]
+            placeholders = ",".join("?" for _ in cols)
+            sql = f"INSERT OR REPLACE INTO {table} ({','.join(cols)}) VALUES ({placeholders})"
+            cleaned_rows = []
+            for r in rows:
+                cleaned_row = []
+                for val in r:
+                    if isinstance(val, bool):
+                        cleaned_row.append(1 if val else 0)
+                    else:
+                        cleaned_row.append(val)
+                cleaned_rows.append(cleaned_row)
+            self.turso.executemany(sql, cleaned_rows)
+        except Exception as e:
+            logger.warning("Turso sync error for %s: %s", table, e)
+
+    def sync_all_to_turso(self) -> None:
+        """Syncs all Medallion and Governance tables from DuckDB to Turso."""
+        if not self.turso:
+            return
+        for tbl in [
+            "bronze.orders",
+            "bronze.clicks",
+            "bronze.payments",
+            "bronze.fraud_alerts",
+            "silver.customers",
+            "silver.orders",
+            "silver.payments",
+            "gold.customer_360",
+            "gold.order_facts",
+            "gold.fraud_summary",
+            "governance.erasure_audit_log",
+            "governance.pii_manifest",
+            "governance.data_quality_runs",
+            "governance.suppression_registry",
+            "governance.watermarks",
+        ]:
+            self.sync_table_to_turso(tbl)
+
+    def seed_from_lake(self, hf_repo: str = "swadhinbiswas/eustream") -> dict[str, int]:
+        """Loads Parquet tables from Hugging Face lake into DuckDB if local tables are empty,
+        then syncs them to Turso."""
+        loaded: dict[str, int] = {}
+        hf_base = f"hf://datasets/{hf_repo}"
+        mapping = {
+            "silver.customers": f"{hf_base}/silver/customers.parquet",
+            "silver.orders": f"{hf_base}/silver/orders.parquet",
+            "silver.payments": f"{hf_base}/silver/payments.parquet",
+            "gold.customer_360": f"{hf_base}/gold/customer_360.parquet",
+            "gold.order_facts": f"{hf_base}/gold/order_facts.parquet",
+            "gold.fraud_summary": f"{hf_base}/gold/fraud_summary.parquet",
+        }
+        for table, parquet_url in mapping.items():
+            try:
+                cnt = self.scalar(f"SELECT count(*) FROM {table}")
+                if cnt == 0:
+                    self.conn.execute(
+                        f"INSERT OR IGNORE INTO {table} SELECT * FROM read_parquet('{parquet_url}')"  # noqa: S608
+                    )
+                    loaded[table] = self.scalar(f"SELECT count(*) FROM {table}")
+                    if self.turso:
+                        self.sync_table_to_turso(table)
+            except Exception as e:
+                logger.debug("seed_from_lake skipped for %s: %s", table, e)
+        return loaded
 
     # ---- Bronze (raw append) ----
 
     def append_order(self, order: OrderPlaced) -> None:
+        now = time.time()
         self.conn.execute(
             "INSERT OR IGNORE INTO bronze.orders VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
@@ -170,11 +252,33 @@ class Warehouse:
                 order.amount_eur,
                 order.marketing_consent,
                 order.currency,
-                time.time(),
+                now,
             ),
         )
+        if self.turso:
+            try:
+                self.turso.execute(
+                    "INSERT OR IGNORE INTO bronze.orders VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        order.event_id,
+                        order.schema_version,
+                        order.occurred_at,
+                        order.order_id,
+                        order.customer_id,
+                        order.email,
+                        order.iban,
+                        order.country,
+                        order.amount_eur,
+                        1 if order.marketing_consent else 0,
+                        order.currency,
+                        now,
+                    ),
+                )
+            except Exception as e:
+                logger.debug("Turso append_order error: %s", e)
 
     def append_click(self, click: PageClick) -> None:
+        now = time.time()
         self.conn.execute(
             "INSERT OR IGNORE INTO bronze.clicks VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
@@ -187,11 +291,31 @@ class Warehouse:
                 click.ip_address,
                 click.page,
                 click.country,
-                time.time(),
+                now,
             ),
         )
+        if self.turso:
+            try:
+                self.turso.execute(
+                    "INSERT OR IGNORE INTO bronze.clicks VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        click.event_id,
+                        click.schema_version,
+                        click.occurred_at,
+                        click.click_id,
+                        click.customer_id,
+                        click.session_id,
+                        click.ip_address,
+                        click.page,
+                        click.country,
+                        now,
+                    ),
+                )
+            except Exception as e:
+                logger.debug("Turso append_click error: %s", e)
 
     def append_payment(self, payment: PaymentProcessed) -> None:
+        now = time.time()
         self.conn.execute(
             "INSERT OR IGNORE INTO bronze.payments VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
@@ -206,9 +330,30 @@ class Warehouse:
                 payment.country,
                 payment.merchant_country,
                 payment.status,
-                time.time(),
+                now,
             ),
         )
+        if self.turso:
+            try:
+                self.turso.execute(
+                    "INSERT OR IGNORE INTO bronze.payments VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        payment.event_id,
+                        payment.schema_version,
+                        payment.occurred_at,
+                        payment.payment_id,
+                        payment.order_id,
+                        payment.customer_id,
+                        payment.iban,
+                        payment.amount_eur,
+                        payment.country,
+                        payment.merchant_country,
+                        payment.status,
+                        now,
+                    ),
+                )
+            except Exception as e:
+                logger.debug("Turso append_payment error: %s", e)
 
     def bronze_rows(self, table: str, limit: int | None = None) -> list[Row]:
         statements = {
@@ -225,7 +370,13 @@ class Warehouse:
         sql = statements[table]
         if limit is not None:
             sql += f" LIMIT {int(limit)}"
-        return _rows_to_dicts(self.conn.execute(sql))
+        rows = _rows_to_dicts(self.conn.execute(sql))
+        if not rows and self.turso:
+            try:
+                rows = self.turso.query(sql)
+            except Exception as e:
+                logger.debug("Turso bronze_rows error: %s", e)
+        return rows
 
     def load_bronze_from_records(self, topic: str, records: Sequence[Record]) -> None:
         """Loads bus records for a topic into the corresponding Bronze table.
@@ -265,8 +416,6 @@ class Warehouse:
         ``governance.pii.hash_pii`` (``sha256(salt + ':' + value)``) so the
         warehouse and the governance library stay interoperable.
         """
-        # Single-quote escaping keeps the salt safe to inline in SQL; the
-        # value is operator configuration (EUROSTREAM_PII_SALT), not user input.
         salt = pii_salt.replace("'", "''")
         self.conn.execute(
             f"""
@@ -315,6 +464,13 @@ class Warehouse:
         if max_ts:
             self.set_watermark("silver", float(max_ts))
 
+        # Sync Silver to Turso
+        if self.turso:
+            self.sync_table_to_turso("silver.customers")
+            self.sync_table_to_turso("silver.orders")
+            self.sync_table_to_turso("silver.payments")
+            self.sync_table_to_turso("governance.watermarks")
+
     # ---- Gold (consent-aware aggregates) ----
 
     def build_gold(self) -> None:
@@ -360,13 +516,13 @@ class Warehouse:
         max_val = row[0] if row else None
         if max_val:
             self.set_watermark("gold", float(max_val))
-        # Best-effort sync Gold to Turso for Render dashboard reads when data is clean
+
+        # Sync Gold to Turso
         if self.turso:
-            try:
-                # Lightweight sync: upsert Gold counts (dashboard only needs row counts, not full rows)
-                pass
-            except Exception:  # noqa: S110, S112
-                pass
+            self.sync_table_to_turso("gold.customer_360")
+            self.sync_table_to_turso("gold.order_facts")
+            self.sync_table_to_turso("gold.fraud_summary")
+            self.sync_table_to_turso("governance.watermarks")
 
     def table_exists(self, schema: str, table: str) -> bool:
         row = self.conn.execute(
@@ -385,21 +541,32 @@ class Warehouse:
         ).fetchone()
         if row is not None and row[0] is not None:
             return float(row[0])
+        if self.turso:
+            try:
+                res = self.turso.scalar(
+                    "SELECT last_ts FROM governance.watermarks WHERE pipeline=?", (pipeline,)
+                )
+                if res:
+                    return float(res)
+            except Exception as e:
+                logger.debug("Turso get_watermark error: %s", e)
         return 0.0
 
     def set_watermark(self, pipeline: str, ts: float) -> None:
         self.conn.execute(
             "INSERT OR REPLACE INTO governance.watermarks VALUES (?,?)", (pipeline, ts)
         )
+        if self.turso:
+            try:
+                self.turso.execute(
+                    "INSERT OR REPLACE INTO governance.watermarks VALUES (?,?)", (pipeline, ts)
+                )
+            except Exception as e:
+                logger.debug("Turso set_watermark error: %s", e)
 
     def build_silver_incremental(self, pii_salt: str = PII_SALT) -> dict[str, int]:
-        """Incremental Silver build: only re-process customers with new Bronze rows.
-
-        Returns counts of affected customers/orders/payments for lineage.
-        Full rebuild remains available via `build_silver()` for backfills.
-        """
+        """Incremental Silver build: only re-process customers with new Bronze rows."""
         watermark = self.get_watermark("silver")
-        # Find affected customers since watermark
         affected_rows = self.conn.execute(
             "SELECT DISTINCT customer_id FROM bronze.orders WHERE occurred_at > ?", (watermark,)
         ).fetchall()
@@ -408,7 +575,6 @@ class Warehouse:
             return {"customers": 0, "orders": 0, "payments": 0}
 
         salt = pii_salt.replace("'", "''")
-        # Upsert only affected customers (recompute from full history for correctness)
         placeholders = ",".join("?" for _ in affected)
         self.conn.execute(
             f"DELETE FROM silver.customers WHERE customer_id IN ({placeholders})", affected
@@ -430,7 +596,6 @@ class Warehouse:
             """,
             affected,
         )
-        # Orders: incremental dedup insert
         self.conn.execute(
             """
             INSERT OR IGNORE INTO silver.orders (order_id, customer_id, amount_eur, country, occurred_at, dedup_count)
@@ -442,7 +607,6 @@ class Warehouse:
             """,
             (watermark,),
         )
-        # Payments: incremental
         self.conn.execute(
             """
             INSERT OR IGNORE INTO silver.payments (payment_id, order_id, customer_id, amount_eur, country,
@@ -455,17 +619,22 @@ class Warehouse:
             """,
             (watermark,),
         )
-        # Advance watermark to max seen
         row = self.conn.execute("SELECT max(occurred_at) FROM bronze.orders").fetchone()
         max_ts = row[0] if row else None
         if max_ts:
             self.set_watermark("silver", float(max_ts))
+
+        if self.turso:
+            self.sync_table_to_turso("silver.customers")
+            self.sync_table_to_turso("silver.orders")
+            self.sync_table_to_turso("silver.payments")
+            self.sync_table_to_turso("governance.watermarks")
+
         return {"customers": len(affected), "orders": 0, "payments": 0}
 
     def build_gold_incremental(self) -> dict[str, int]:
         """Incremental Gold: recompute only customers touched in Silver since last Gold watermark."""
         watermark = self.get_watermark("gold")
-        # Affected customers = those with recent Silver changes or new fraud alerts
         affected_rows = self.conn.execute(
             """
             SELECT DISTINCT customer_id FROM silver.customers WHERE last_seen > ?
@@ -504,7 +673,6 @@ class Warehouse:
             """,
             affected,
         )
-        # Order facts incremental: new silver.orders since watermark
         self.conn.execute(
             """
             INSERT OR IGNORE INTO gold.order_facts
@@ -513,7 +681,6 @@ class Warehouse:
             """,
             (watermark,),
         )
-        # Fraud summary recompute for affected
         self.conn.execute(
             f"DELETE FROM gold.fraud_summary WHERE customer_id IN ({placeholders})", affected
         )
@@ -530,6 +697,13 @@ class Warehouse:
         max_val = max_ts[0] if max_ts else None
         if max_val:
             self.set_watermark("gold", float(max_val))
+
+        if self.turso:
+            self.sync_table_to_turso("gold.customer_360")
+            self.sync_table_to_turso("gold.order_facts")
+            self.sync_table_to_turso("gold.fraud_summary")
+            self.sync_table_to_turso("governance.watermarks")
+
         return {"customers": len(affected)}
 
     # ---- Lake export (de-identified layers only) ----
@@ -544,15 +718,7 @@ class Warehouse:
     )
 
     def export_lake(self, lake_root: Path) -> list[Path]:
-        """Snapshot the de-identified Silver/Gold layers to Parquet under
-        ``lake_root`` for external consumers (Spark/BI/ML).
-
-        Bronze is deliberately excluded: raw PII never leaves the governed
-        warehouse boundary. The lake is a snapshot refreshed on every
-        medallion run — and re-snapshotted by the erasure service's
-        ``on_complete`` hook, so a customer deleted under Art. 17 leaves the
-        lake within the same request instead of surviving a stale copy.
-        """
+        """Snapshot the de-identified Silver/Gold layers to Parquet under lake_root."""
         paths: list[Path] = []
         lake_root = Path(lake_root)
         for table in self.LAKE_EXPORT_TABLES:
@@ -568,52 +734,83 @@ class Warehouse:
     def ingest_fraud_alerts(self, alerts: list[Row]) -> None:
         if not alerts:
             return
+        tuples = [
+            (
+                a["customer_id"],
+                a["rule"],
+                a["detail"],
+                a["severity"],
+                a["alert_ts"],
+                a["window_start"],
+                a["window_end"],
+            )
+            for a in alerts
+        ]
         self.conn.executemany(
             "INSERT INTO bronze.fraud_alerts VALUES (?,?,?,?,?,?,?)",
-            [
-                (
-                    a["customer_id"],
-                    a["rule"],
-                    a["detail"],
-                    a["severity"],
-                    a["alert_ts"],
-                    a["window_start"],
-                    a["window_end"],
-                )
-                for a in alerts
-            ],
+            tuples,
         )
+        if self.turso:
+            try:
+                self.turso.executemany(
+                    "INSERT INTO bronze.fraud_alerts VALUES (?,?,?,?,?,?,?)",
+                    tuples,
+                )
+            except Exception as e:
+                logger.debug("Turso ingest_fraud_alerts error: %s", e)
 
     def query(self, sql: str) -> list[Row]:
-        return _rows_to_dicts(self.conn.execute(sql))
+        rows = _rows_to_dicts(self.conn.execute(sql))
+        if not rows and self.turso:
+            try:
+                rows = self.turso.query(sql)
+            except Exception as e:
+                logger.debug("Turso query error: %s", e)
+        return rows
 
     def scalar(self, sql: str) -> int:
         row = self.conn.execute(sql).fetchone()
-        if row is None:
-            return 0
-        return int(row[0])
+        if row is not None and row[0] is not None and int(row[0]) > 0:
+            return int(row[0])
+        if self.turso:
+            try:
+                val = self.turso.scalar(sql)
+                if val is not None and int(val) > 0:
+                    return int(val)
+            except Exception as e:
+                logger.debug("Turso scalar error: %s", e)
+        return int(row[0]) if row and row[0] is not None else 0
 
     # ---- Governance helpers ----
 
     def add_suppressed(self, customer_id: str, added_at: float | None = None) -> None:
-        """Record a customer in the durable suppression registry.
-
-        Streaming consumers consult this so a customer who exercised their
-        Art. 17 right stops generating new derived data (fraud alerts,
-        aggregates) even across process restarts."""
         if added_at is None:
-            import time
-
             added_at = time.time()
         self.conn.execute(
             "INSERT OR REPLACE INTO governance.suppression_registry VALUES (?,?)",
             (customer_id, added_at),
         )
+        if self.turso:
+            try:
+                self.turso.execute(
+                    "INSERT OR REPLACE INTO governance.suppression_registry VALUES (?,?)",
+                    (customer_id, added_at),
+                )
+            except Exception as e:
+                logger.debug("Turso add_suppressed error: %s", e)
 
     def suppressed_ids(self) -> list[str]:
         rows = self.conn.execute(
             "SELECT customer_id FROM governance.suppression_registry ORDER BY customer_id"
         ).fetchall()
+        if not rows and self.turso:
+            try:
+                turso_rows = self.turso.query(
+                    "SELECT customer_id FROM governance.suppression_registry ORDER BY customer_id"
+                )
+                return [str(r.get("customer_id")) for r in turso_rows if r.get("customer_id")]
+            except Exception as e:
+                logger.debug("Turso suppressed_ids error: %s", e)
         return [str(r[0]) for r in rows]
 
     def save_manifest(self, manifest: Manifest) -> None:
@@ -625,12 +822,29 @@ class Warehouse:
         ]
         if rows:
             self.conn.executemany("INSERT INTO governance.pii_manifest VALUES (?,?,?)", rows)
+            if self.turso:
+                try:
+                    self.turso.execute("DELETE FROM governance.pii_manifest")
+                    self.turso.executemany(
+                        "INSERT INTO governance.pii_manifest VALUES (?,?,?)", rows
+                    )
+                except Exception as e:
+                    logger.debug("Turso save_manifest error: %s", e)
 
     def record_dq(self, run_id: str, check_name: str, passed: bool, detail: str) -> None:
+        now = time.time()
         self.conn.execute(
             "INSERT INTO governance.data_quality_runs VALUES (?,?,?,?,?)",
-            (run_id, check_name, passed, detail, time.time()),
+            (run_id, check_name, passed, detail, now),
         )
+        if self.turso:
+            try:
+                self.turso.execute(
+                    "INSERT INTO governance.data_quality_runs VALUES (?,?,?,?,?)",
+                    (run_id, check_name, 1 if passed else 0, detail, now),
+                )
+            except Exception as e:
+                logger.debug("Turso record_dq error: %s", e)
 
     def count_rows(self, table: str) -> int:
         statements = {
@@ -650,6 +864,12 @@ class Warehouse:
         if table not in statements:
             raise ValueError(f"unknown table: {table}")
         row = self.conn.execute(statements[table]).fetchone()
-        if row is None:
-            return 0
-        return int(row[0])
+        cnt = int(row[0]) if row and row[0] is not None else 0
+        if cnt == 0 and self.turso:
+            try:
+                t_cnt = self.turso.scalar(statements[table])
+                if t_cnt is not None and int(t_cnt) > 0:
+                    return int(t_cnt)
+            except Exception as e:
+                logger.debug("Turso count_rows error: %s", e)
+        return cnt

@@ -56,7 +56,11 @@ def _fresh() -> tuple[Settings, Any, Warehouse, Metrics, PIIClassifier]:
             bus = open_bus(settings.data_dir / "events.db")
     else:
         bus = open_bus(settings.data_dir / "events.db")
-    warehouse = Warehouse(settings.warehouse_path)
+    warehouse = Warehouse(
+        settings.warehouse_path,
+        turso_url=settings.turso_database_url,
+        turso_token=settings.turso_auth_token,
+    )
     metrics = Metrics(settings.metrics_path)
     classifier = PIIClassifier(settings.pii_manifest_path)
     return settings, bus, warehouse, metrics, classifier
@@ -433,6 +437,82 @@ def demo() -> None:
         else "  verification: FAILED"
     )
     metrics.flush()
+
+
+@app.command("sync-turso")
+def sync_turso(
+    seed_lake: bool = typer.Option(True, help="Seed from Hugging Face lake if DuckDB is empty"),
+    hf_repo: str = typer.Option("swadhinbiswas/eustream", help="HF lake repository"),
+) -> None:
+    """Sync all Medallion tables and Governance state from DuckDB into Turso."""
+    settings, _, warehouse, _, _ = _fresh()
+    if not warehouse.turso:
+        typer.secho(
+            "TURSO_DATABASE_URL or TURSO_AUTH_TOKEN not configured!",
+            fg=typer.colors.RED,
+            bold=True,
+        )
+        raise typer.Exit(code=1)
+
+    if seed_lake:
+        loaded = warehouse.seed_from_lake(hf_repo)
+        if loaded:
+            typer.echo(f"Seeded from lake {hf_repo}: {loaded}")
+
+    warehouse.sync_all_to_turso()
+    typer.secho("✅ All tables synchronized to Turso libSQL!", fg=typer.colors.GREEN, bold=True)
+    for tbl in [
+        "bronze.orders",
+        "bronze.clicks",
+        "bronze.payments",
+        "bronze.fraud_alerts",
+        "silver.customers",
+        "silver.orders",
+        "silver.payments",
+        "gold.customer_360",
+        "gold.order_facts",
+        "gold.fraud_summary",
+    ]:
+        try:
+            cnt = warehouse.turso.scalar(f"SELECT count(*) FROM {tbl}")  # noqa: S608
+            typer.echo(f"  {tbl}: {cnt} rows in Turso")
+        except Exception as e:
+            typer.echo(f"  {tbl}: query error ({e})")
+
+
+@app.command("probe-turso")
+def probe_turso() -> None:
+    """Check Turso connectivity and list current remote table counts."""
+    settings, _, warehouse, _, _ = _fresh()
+    if not warehouse.turso:
+        typer.secho(
+            "❌ Turso not connected. Please set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    typer.secho(f"✅ Turso connected: {warehouse.turso.http_endpoint}", fg=typer.colors.GREEN)
+    warehouse.turso.init_schema()
+    for tbl in [
+        "bronze.orders",
+        "bronze.clicks",
+        "bronze.payments",
+        "bronze.fraud_alerts",
+        "silver.customers",
+        "silver.orders",
+        "silver.payments",
+        "gold.customer_360",
+        "gold.order_facts",
+        "gold.fraud_summary",
+        "governance.erasure_audit_log",
+        "governance.suppression_registry",
+        "governance.watermarks",
+    ]:
+        try:
+            cnt = warehouse.turso.scalar(f"SELECT count(*) FROM {tbl}")  # noqa: S608
+            typer.echo(f"  {tbl}: {cnt} rows")
+        except Exception as e:
+            typer.echo(f"  {tbl}: error ({e})")
 
 
 def _drain(consumer: Consumer, max_records: int | None = None) -> list[Record]:

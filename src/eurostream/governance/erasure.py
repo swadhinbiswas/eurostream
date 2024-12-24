@@ -212,6 +212,31 @@ class ErasureService:
         if self._warehouse.table_exists("bronze", "fraud_alerts"):
             conn.execute("DELETE FROM bronze.fraud_alerts WHERE customer_id=?", (customer_id,))
 
+        if self._warehouse.turso:
+            try:
+                t = self._warehouse.turso
+                t.execute(
+                    "UPDATE bronze.orders SET email=?, iban=? WHERE customer_id=?",
+                    (ANONYMIZED, ANONYMIZED, customer_id),
+                )
+                t.execute(
+                    "UPDATE bronze.payments SET iban=? WHERE customer_id=?",
+                    (ANONYMIZED, customer_id),
+                )
+                t.execute(
+                    "UPDATE bronze.clicks SET ip_address=? WHERE customer_id=?",
+                    (ANONYMIZED, customer_id),
+                )
+                t.execute("DELETE FROM silver.customers WHERE customer_id=?", (customer_id,))
+                t.execute("DELETE FROM silver.orders WHERE customer_id=?", (customer_id,))
+                t.execute("DELETE FROM silver.payments WHERE customer_id=?", (customer_id,))
+                t.execute("DELETE FROM gold.customer_360 WHERE customer_id=?", (customer_id,))
+                t.execute("DELETE FROM gold.order_facts WHERE customer_id=?", (customer_id,))
+                t.execute("DELETE FROM gold.fraud_summary WHERE customer_id=?", (customer_id,))
+                t.execute("DELETE FROM bronze.fraud_alerts WHERE customer_id=?", (customer_id,))
+            except Exception as e:
+                logger.warning("Turso erasure cascade error: %s", e)
+
     def _confirmation_hash(self, request_id: str, customer_id: str) -> str:
         return hashlib.sha256(f"{request_id}:{customer_id}".encode()).hexdigest()[:16]
 
@@ -230,6 +255,22 @@ class ErasureService:
                 audit.confirmation_hash,
             ),
         )
+        if self._warehouse.turso:
+            try:
+                self._warehouse.turso.execute(
+                    "INSERT INTO governance.erasure_audit_log VALUES (?,?,?,?,?,?,?)",
+                    (
+                        audit.request_id,
+                        audit.customer_id,
+                        audit.requested_at,
+                        audit.completed_at,
+                        ",".join(audit.layers_touched),
+                        audit.status,
+                        audit.confirmation_hash,
+                    ),
+                )
+            except Exception as e:
+                logger.warning("Turso audit insert error: %s", e)
         try:
             self._audit_log_path.parent.mkdir(parents=True, exist_ok=True)
             with self._audit_log_path.open("a") as fh:

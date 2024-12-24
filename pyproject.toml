@@ -5,7 +5,6 @@ description = "GDPR-compliant real-time customer & order analytics platform"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "libsql-experimental>=0.2",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "duckdb>=1.0",
@@ -66,6 +65,8 @@ ignore = ["S101", "B008", "E501"]
 "tests/*" = ["S105", "S106", "S608"]
 "src/eurostream/producers.py" = ["S311"]
 "src/eurostream/cli.py" = ["S311"]
+"src/eurostream/api.py" = ["S311", "S608"]
+"src/eurostream/dashboard.py" = ["S608"]
 # build_silver inlines the (escaped, operator-configured) PII salt into the
 # hash expression; DuckDB has no bind parameters inside COPY/INSERT SELECT.
 "src/eurostream/warehouse.py" = ["S608"]
