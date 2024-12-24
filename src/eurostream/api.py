@@ -26,7 +26,24 @@ def create_app(
     settings: Settings,
     warehouse: Warehouse | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="EuroStream Governance API", version=__version__)
+    app = FastAPI(
+        title="EuroStream Governance API",
+        version=__version__,
+        description="GDPR-compliant real-time customer analytics, DSAR right-to-erasure cascade, and Prometheus observability.",
+    )
+
+    @app.get("/")
+    def root() -> dict[str, object]:
+        return {
+            "name": "EuroStream Governance API",
+            "version": __version__,
+            "docs": "/docs",
+            "health": "/health",
+            "metrics": "/metrics",
+            "prometheus": "/metrics/prometheus",
+            "erasure_audit": "/governance/erasure-audit",
+            "customer_360": "/gold/customer-360",
+        }
 
     @app.post("/erasure-requests")
     def request_erasure(body: ErasureRequest) -> dict[str, object]:
