@@ -10,7 +10,7 @@ The governance API is a FastAPI app (`src/eurostream/api.py`). Run it with:
 ```bash
 uv run uvicorn eurostream.api:app --reload
 # or the container image:
-docker run -p 8000:8000 eurostream
+docker run -p 7860:7860 eurostream
 ```
 
 ## Endpoints
@@ -21,7 +21,7 @@ Accepts a GDPR Article 17 request and enqueues a tombstone on the bus.
 Execution is asynchronous via the worker.
 
 ```bash
-curl -X POST http://localhost:8000/erasure-requests \
+curl -X POST http://localhost:7860/erasure-requests \
   -H 'Content-Type: application/json' \
   -d '{"customer_id": "cust_424242"}'
 ```
@@ -35,16 +35,37 @@ curl -X POST http://localhost:8000/erasure-requests \
 }
 ```
 
-Request body validation: `customer_id` requires ≥3 characters; `reason`
-defaults to `"GDPR_ARTICLE_17"`.
+Request body validation: `customer_id` must match
+`^[A-Za-z0-9_.\-]{1,64}$` (a path or body value that fails is a `422`, never
+reaching SQL). The response is `202 Accepted` because the cascade runs in the
+background worker started with the app; send `{"customer_id": "...", "sync": true}`
+to run it inline and get `200 OK` with `status`, `confirmation_hash` and
+`layers_touched` back.
+
+Every mutating endpoint (`/erasure-requests`, `/erase`, `/produce`, `/stream`,
+`/transform`, `/quality-gate`, `/sync-turso`) requires
+`Authorization: Bearer $EUROSTREAM_API_TOKEN` when that variable is set, and
+answers `401` otherwise. It is unset by default so the demo stays open.
 
 ### `GET /health`
 
 Liveness plus the current suppression registry snapshot:
 
 ```json
-{ "status": "ok", "suppressed": ["cust_424242"] }
+{
+  "status": "ok",
+  "version": "0.2.0",
+  "backend": "sqlite",
+  "requested_backend": "kafka",
+  "degraded": true,
+  "turso_connected": false,
+  "suppressed": ["cust_424242"]
+}
 ```
+
+`degraded` is `true` whenever the effective backend differs from the
+requested one (for example Kafka requested but unavailable), so monitoring can
+alert on a silently falling-back process.
 
 ### `GET /metrics`
 
@@ -64,10 +85,28 @@ Prometheus-shaped snapshot — counters, gauges, histogram summaries
 
 Audit rows newest-first, straight from `governance.erasure_audit_log`.
 
-### `GET /gold/customer-360?limit=100`
+### `GET /gold/customer-360?limit=100&search=acme`
 
-Reads the consent-aware Gold view. The `limit` parameter is cast to `int`
-before interpolation (the one dynamic identifier in a read path).
+Reads the consent-aware Gold view. Every parameter — `limit`, `offset`,
+`search`, `country`, `consent` — is validated by FastAPI and sent to DuckDB as
+a bound parameter; the query contains no interpolated values.
+
+### `POST /quality-gate`
+
+Runs the data-quality gate and returns the report. Concurrent calls are safe:
+each runs on its own DuckDB connection and returns byte-identical answers for
+identical warehouse state.
+
+### `POST /sync-turso`
+
+Pushes `Warehouse.TURSO_TABLES` to Turso and reports `table_counts` plus
+`table_errors` per table, with `status` of `ok` or `partial`. Without
+`TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` it answers `503` problem+json.
+
+### `GET /stats`
+
+Row counts, watermarks, effective vs requested backend, `degraded`, and the
+counted `lake_files` — the number the dashboard charts read.
 
 ## Wiring
 
@@ -78,7 +117,9 @@ settings, warehouse)`.
 
 ## Production hardening checklist
 
-- [ ] Terminate auth at your gateway/SSO before exposing `/erasure-requests`
+- [ ] Set `EUROSTREAM_API_TOKEN` (or terminate auth at your gateway/SSO) before
+      exposing `/erasure-requests`
 - [ ] Rate-limit erasure intake (it fans out work)
 - [ ] Ship `data/logs/erasure_audit.jsonl` to WORM storage
-- [ ] Scrape `/metrics` from Prometheus instead of polling JSONL
+- [ ] Scrape `/metrics/prometheus` (Prometheus text exposition) instead of
+      polling the JSONL snapshots

@@ -109,6 +109,22 @@ class Settings(BaseSettings):
         description="Turso / libSQL authentication token",
     )
 
+    hf_repo: str = Field(
+        default="swadhinbiswas/eustream",
+        description="Hugging Face dataset repo holding the public Parquet lake",
+    )
+    cors_origins: str = Field(
+        default="*",
+        description="Comma-separated allowed browser origins for the API/dashboard",
+    )
+    api_token: str | None = Field(
+        default=None,
+        description=(
+            "When set, every mutating endpoint requires "
+            "`Authorization: Bearer <token>`; reads stay public."
+        ),
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

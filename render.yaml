@@ -11,6 +11,8 @@ services:
     envVars:
       - key: EUROSTREAM_EVENT_BUS_BACKEND
         value: kafka
+      - key: EUROSTREAM_API_TOKEN
+        sync: false
       - key: EUROSTREAM_KAFKA_BOOTSTRAP_SERVERS
         sync: false
       - key: EUROSTREAM_KAFKA_USERNAME

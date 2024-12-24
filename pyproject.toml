@@ -1,7 +1,7 @@
 [project]
 name = "eurostream"
 version = "0.2.0"
-description = "GDPR-compliant real-time customer & order analytics platform"
+description = "GDPR-oriented streaming fraud detection and medallion lakehouse reference platform"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -25,9 +25,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://eurostream-docs.pages.dev"
-Repository = "https://github.com/swadhin/eurostream"
-Issues = "https://github.com/swadhin/eurostream/issues"
+Homepage = "https://github.com/swadhinbiswas/eurostream"
+Repository = "https://github.com/swadhinbiswas/eurostream"
+Issues = "https://github.com/swadhinbiswas/eurostream/issues"
 
 [dependency-groups]
 dev = [

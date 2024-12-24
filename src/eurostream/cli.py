@@ -18,7 +18,7 @@ from eurostream.governance.pii import PIIClassifier
 from eurostream.lineage import LineageEmitter
 from eurostream.metrics import Metrics
 from eurostream.models import ErasureRequested
-from eurostream.orchestration import DAG, DAGTask
+from eurostream.orchestration import DAG, DAGRunError, DAGTask, TaskResult
 from eurostream.producers import (
     ClickProducer,
     OrderProducer,
@@ -271,10 +271,31 @@ def transform(
             DAGTask("export_lake", export_lake, depends_on=["quality_gate"]),
         ],
     )
-    results = dag.run()
-    for task_id, r in results.items():
-        typer.echo(f"  {task_id}: {'ok' if r.ok else 'FAILED'} ({r.duration_s:.2f}s)")
+
+    def _on_task(r: TaskResult) -> None:
+        _echo_task(r)
+        if not r.ok:
+            lineage.fail(r.task_id, r.error or "unknown error")
+
+    try:
+        dag.run(on_task=_on_task)
+    except DAGRunError as exc:
+        metrics.flush()
+        typer.secho(f"transform failed: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
     metrics.flush()
+
+
+def _echo_task(r: TaskResult) -> None:
+    """Print each task as it finishes and record failures in lineage.
+
+    Registered via ``DAG.run(on_task=...)`` so a failing run still leaves a
+    printed result and a ``failed`` lineage event instead of a bare traceback.
+    """
+    marker = "ok" if r.ok else "FAILED"
+    typer.echo(f"  {r.task_id}: {marker} ({r.duration_s:.2f}s)")
+    if not r.ok:
+        typer.secho(f"    {r.error}", fg=typer.colors.RED, err=True)
 
 
 @app.command()
@@ -289,11 +310,20 @@ def erase(customer_id: str) -> None:
         customer_id=customer_id,
     )
     audit = erasure.execute(event)
+    metrics.flush()
+    if audit.status != "completed":
+        typer.secho(
+            f"erasure of {customer_id} FAILED after "
+            f"{audit.completed_at - audit.requested_at:.2f}s "
+            f"layers={audit.layers_touched} — see {settings.audit_log_path}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
     typer.echo(
         f"erased {customer_id} in {audit.completed_at - audit.requested_at:.2f}s "
         f"layers={audit.layers_touched} confirmation={audit.confirmation_hash}"
     )
-    metrics.flush()
 
 
 @app.command()
@@ -396,7 +426,12 @@ def demo() -> None:
             ),
         ],
     )
-    transform_dag.run()
+    try:
+        transform_dag.run(on_task=_echo_task)
+    except DAGRunError as exc:
+        metrics.flush()
+        typer.secho(f"demo aborted: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
 
     bronze_before = warehouse.scalar(
         "SELECT count(*) c FROM bronze.orders WHERE customer_id = 'cust_424242' AND email <> '<anonymized>'"
@@ -419,11 +454,15 @@ def demo() -> None:
     gold_after = warehouse.scalar(
         "SELECT count(*) c FROM gold.customer_360 WHERE customer_id = 'cust_424242'"
     )
+    silver_after = warehouse.scalar(
+        "SELECT count(*) c FROM silver.customers WHERE customer_id = 'cust_424242'"
+    )
     audit_rows = warehouse.scalar(
         "SELECT count(*) c FROM governance.erasure_audit_log WHERE customer_id = 'cust_424242'"
     )
     typer.echo(f"  bronze PII anonymized rows: {bronze_after} (before: {bronze_before} clear-text)")
     typer.echo(f"  gold customer_360 rows remaining: {gold_after} (expect 0)")
+    typer.echo(f"  silver.customers rows remaining: {silver_after} (expect 0)")
     typer.echo(f"  audit log entries: {audit_rows} (expect 1)")
 
     typer.echo("6/6 summary")
@@ -431,12 +470,24 @@ def demo() -> None:
         f"  erasure SLA: {settings.erasure_sla_seconds}s, completed in "
         f"{audit.completed_at - audit.requested_at:.2f}s"
     )
-    typer.echo(
-        "  verification: PASSED"
-        if gold_after == 0 and audit_rows == 1 and bronze_after > 0
-        else "  verification: FAILED"
-    )
+    checks = {
+        "cascade reported success": audit.status == "completed",
+        "bronze PII anonymized": bronze_after > 0,
+        "gold rows removed": gold_after == 0,
+        "silver rows removed": silver_after == 0,
+        "audit trail written": audit_rows >= 1,
+        "suppression registry tombstoned": victim in warehouse.suppressed_ids(),
+    }
+    passed = all(checks.values())
+    for name, ok in checks.items():
+        typer.echo(f"  {'PASS' if ok else 'FAIL'}  {name}")
+    typer.echo(f"  verification: {'PASSED' if passed else 'FAILED'}")
     metrics.flush()
+    bus.close()
+    warehouse.close()
+    if not passed:
+        # A demo that fails must fail the process — CI and humans both read $?
+        raise typer.Exit(code=1)
 
 
 @app.command("sync-turso")
@@ -459,25 +510,33 @@ def sync_turso(
         if loaded:
             typer.echo(f"Seeded from lake {hf_repo}: {loaded}")
 
-    warehouse.sync_all_to_turso()
-    typer.secho("✅ All tables synchronized to Turso libSQL!", fg=typer.colors.GREEN, bold=True)
-    for tbl in [
-        "bronze.orders",
-        "bronze.clicks",
-        "bronze.payments",
-        "bronze.fraud_alerts",
-        "silver.customers",
-        "silver.orders",
-        "silver.payments",
-        "gold.customer_360",
-        "gold.order_facts",
-        "gold.fraud_summary",
-    ]:
+    try:
+        warehouse.sync_all_to_turso()
+    except Exception as e:  # noqa: BLE001 - report and fail, don't claim success
+        typer.secho(f"sync failed before verification: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from e
+
+    failed: list[str] = []
+    for tbl in Warehouse.TURSO_TABLES:
         try:
             cnt = warehouse.turso.scalar(f"SELECT count(*) FROM {tbl}")  # noqa: S608
             typer.echo(f"  {tbl}: {cnt} rows in Turso")
-        except Exception as e:
-            typer.echo(f"  {tbl}: query error ({e})")
+        except Exception as e:  # noqa: BLE001
+            failed.append(tbl)
+            typer.secho(f"  {tbl}: NOT SYNCED ({e})", fg=typer.colors.RED)
+    if failed:
+        typer.secho(
+            f"partial sync — {len(failed)} of {len(Warehouse.TURSO_TABLES)} tables missing in Turso",
+            fg=typer.colors.RED,
+            bold=True,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    typer.secho(
+        f"All {len(Warehouse.TURSO_TABLES)} tables synchronized to Turso libSQL",
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
 
 
 @app.command("probe-turso")
@@ -493,26 +552,12 @@ def probe_turso() -> None:
 
     typer.secho(f"✅ Turso connected: {warehouse.turso.http_endpoint}", fg=typer.colors.GREEN)
     warehouse.turso.init_schema()
-    for tbl in [
-        "bronze.orders",
-        "bronze.clicks",
-        "bronze.payments",
-        "bronze.fraud_alerts",
-        "silver.customers",
-        "silver.orders",
-        "silver.payments",
-        "gold.customer_360",
-        "gold.order_facts",
-        "gold.fraud_summary",
-        "governance.erasure_audit_log",
-        "governance.suppression_registry",
-        "governance.watermarks",
-    ]:
+    for tbl in Warehouse.TURSO_TABLES:
         try:
             cnt = warehouse.turso.scalar(f"SELECT count(*) FROM {tbl}")  # noqa: S608
             typer.echo(f"  {tbl}: {cnt} rows")
-        except Exception as e:
-            typer.echo(f"  {tbl}: error ({e})")
+        except Exception as e:  # noqa: BLE001
+            typer.secho(f"  {tbl}: error ({e})", fg=typer.colors.RED)
 
 
 def _drain(consumer: Consumer, max_records: int | None = None) -> list[Record]:

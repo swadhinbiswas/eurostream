@@ -102,7 +102,7 @@ export default defineConfig({
         "Build a GDPR-compliant real-time analytics platform: streaming fraud detection, a medallion warehouse, PII governance and a working Article 17 erasure cascade — all in pure Python. A engineering cookbook with recipes, decisions and interview prep.",
       favicon: "/favicon.svg",
       social: [
-        { icon: "github", label: "GitHub", href: "https://github.com/swadhin/eurostream" },
+        { icon: "github", label: "GitHub", href: "https://github.com/swadhinbiswas/eurostream" },
       ],
       logo: {
         src: "./src/assets/logo.svg",

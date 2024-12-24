@@ -107,7 +107,13 @@ class ErasureService:
 
     def execute(self, event: ErasureRequested) -> ErasureAudit:
         """Runs the full cascade synchronously (used by the worker and by the
-        CLI demo). Returns the audit record."""
+        CLI demo). Returns the audit record.
+
+        Fail-closed: the suppression flag is set before any deletion, so a
+        crash mid-cascade leaves the customer suppressed rather than
+        half-erased and re-scoring. The failure is written to the audit log
+        with ``status="failed"`` and re-raised for the caller.
+        """
         started = time.time()
         layers: list[str] = []
         with self._lock:
@@ -116,11 +122,35 @@ class ErasureService:
         # suppression too (they seed their in-memory set from this table).
         self._warehouse.add_suppressed(event.customer_id, added_at=started)
         layers.append("suppression_registry")
-        self._anonymize_warehouse(event.customer_id)
-        layers.append("warehouse")
-        # Lake layer is counted if a completion hook is wired (normally the Parquet re-snapshot).
-        if self._on_complete is not None:
-            layers.append("lake")
+
+        try:
+            turso_ok = self._anonymize_warehouse(event.customer_id)
+            layers.append("warehouse")
+            if turso_ok:
+                layers.append("turso")
+        except Exception:
+            failure = ErasureAudit(
+                request_id=event.request_id,
+                customer_id=event.customer_id,
+                requested_at=event.occurred_at,
+                completed_at=time.time(),
+                layers_touched=layers,
+                status="failed",
+                confirmation_hash=self._confirmation_hash(event.request_id, event.customer_id),
+            )
+            try:
+                self._append_audit(failure)
+            except Exception:
+                logger.exception("could not record failed erasure %s", event.request_id)
+            self._metrics.incr("erasure_failed")
+            logger.exception(
+                "erasure cascade failed: request=%s customer=%s layers=%s",
+                event.request_id,
+                event.customer_id,
+                ",".join(layers),
+            )
+            raise
+
         audit = ErasureAudit(
             request_id=event.request_id,
             customer_id=event.customer_id,
@@ -130,6 +160,16 @@ class ErasureService:
             status="completed",
             confirmation_hash=self._confirmation_hash(event.request_id, event.customer_id),
         )
+        # Re-snapshot the lake before the audit is written, so a failed export
+        # is recorded instead of being claimed as a layer that was touched.
+        if self._on_complete is not None:
+            try:
+                self._on_complete(audit)
+                audit.layers_touched.append("lake")
+            except Exception:
+                audit.status = "completed_with_errors"
+                self._metrics.incr("erasure_lake_export_failed")
+                logger.exception("lake re-export failed for erasure %s", event.request_id)
         self._append_audit(audit)
         # SLA is end-to-end from request time, not worker start, so queue time counts.
         latency = audit.completed_at - audit.requested_at
@@ -147,14 +187,9 @@ class ErasureService:
             "erasure completed: request=%s customer=%s layers=%s hash=%s",
             event.request_id,
             event.customer_id,
-            ",".join(layers),
+            ",".join(audit.layers_touched),
             audit.confirmation_hash,
         )
-        if self._on_complete:
-            try:
-                self._on_complete(audit)
-            except Exception:
-                logger.exception("on_complete failed for erasure %s", event.request_id)
         return audit
 
     def is_suppressed(self, customer_id: str) -> bool:
@@ -169,7 +204,13 @@ class ErasureService:
     def run_worker(
         self, poll_timeout: float = 0.2, stop_event: threading.Event | None = None
     ) -> None:
-        """Consumes ``erasure_requests`` forever, executing each request."""
+        """Consumes ``erasure_requests`` forever, executing each request.
+
+        One bad request must not take the worker down: a GDPR intake queue
+        that dies on a poison message stops erasing people. Failures are
+        dead-lettered to ``erasure_requests_dlq`` and the offset is committed
+        so the loop keeps making progress.
+        """
         logger.info("erasure worker started")
         while stop_event is None or not stop_event.is_set():
             record = self._consumer.poll(poll_timeout)
@@ -182,60 +223,107 @@ class ErasureService:
             except Exception:
                 self._metrics.incr("malformed_erasure_requests")
                 logger.warning("malformed erasure record at offset %s", record.offset)
+                self._dead_letter(record.value)
                 self._consumer.commit()
                 continue
-            self.execute(event)
+            try:
+                self.execute(event)
+            except Exception:
+                self._metrics.incr("erasure_worker_failures")
+                logger.exception(
+                    "erasure failed for request=%s customer=%s (dead-lettered)",
+                    event.request_id,
+                    event.customer_id,
+                )
+                self._dead_letter(record.value)
             self._consumer.commit()
+
+    def _dead_letter(self, raw: str | None) -> None:
+        """Park an unprocessable request where an operator can replay it."""
+        if raw is None:
+            return
+        try:
+            self._producer.produce(
+                "erasure_requests_dlq",
+                key="failed",
+                value=raw,
+                headers={"reason": "execution_failed"},
+            )
+            if hasattr(self._producer, "flush"):
+                self._producer.flush()
+        except Exception:
+            logger.exception("could not dead-letter erasure request")
 
     # ---- internals ----
 
-    def _anonymize_warehouse(self, customer_id: str) -> None:
-        conn = self._warehouse.conn
-        conn.execute(
-            "UPDATE bronze.orders SET email=?, iban=? WHERE customer_id=?",
-            (ANONYMIZED, ANONYMIZED, customer_id),
-        )
-        conn.execute(
-            "UPDATE bronze.payments SET iban=? WHERE customer_id=?",
-            (ANONYMIZED, customer_id),
-        )
-        conn.execute(
-            "UPDATE bronze.clicks SET ip_address=? WHERE customer_id=?",
-            (ANONYMIZED, customer_id),
-        )
-        conn.execute("DELETE FROM silver.customers WHERE customer_id=?", (customer_id,))
-        conn.execute("DELETE FROM silver.orders WHERE customer_id=?", (customer_id,))
-        conn.execute("DELETE FROM silver.payments WHERE customer_id=?", (customer_id,))
-        conn.execute("DELETE FROM gold.customer_360 WHERE customer_id=?", (customer_id,))
-        conn.execute("DELETE FROM gold.order_facts WHERE customer_id=?", (customer_id,))
-        conn.execute("DELETE FROM gold.fraud_summary WHERE customer_id=?", (customer_id,))
-        if self._warehouse.table_exists("bronze", "fraud_alerts"):
-            conn.execute("DELETE FROM bronze.fraud_alerts WHERE customer_id=?", (customer_id,))
+    def _anonymize_warehouse(self, customer_id: str) -> bool:
+        """Anonymize Bronze and delete the customer from Silver/Gold.
 
-        if self._warehouse.turso:
+        Returns ``True`` when the Turso replica was also updated — callers put
+        that in ``layers_touched`` so the audit log never claims a layer that
+        silently failed. The DuckDB statements run inside one transaction so a
+        failure cannot leave the customer erased in Bronze but intact in Gold.
+        """
+        with self._warehouse.cursor() as conn:
+            conn.execute("BEGIN TRANSACTION")
             try:
-                t = self._warehouse.turso
-                t.execute(
+                conn.execute(
                     "UPDATE bronze.orders SET email=?, iban=? WHERE customer_id=?",
                     (ANONYMIZED, ANONYMIZED, customer_id),
                 )
-                t.execute(
+                conn.execute(
                     "UPDATE bronze.payments SET iban=? WHERE customer_id=?",
                     (ANONYMIZED, customer_id),
                 )
-                t.execute(
+                conn.execute(
                     "UPDATE bronze.clicks SET ip_address=? WHERE customer_id=?",
                     (ANONYMIZED, customer_id),
                 )
-                t.execute("DELETE FROM silver.customers WHERE customer_id=?", (customer_id,))
-                t.execute("DELETE FROM silver.orders WHERE customer_id=?", (customer_id,))
-                t.execute("DELETE FROM silver.payments WHERE customer_id=?", (customer_id,))
-                t.execute("DELETE FROM gold.customer_360 WHERE customer_id=?", (customer_id,))
-                t.execute("DELETE FROM gold.order_facts WHERE customer_id=?", (customer_id,))
-                t.execute("DELETE FROM gold.fraud_summary WHERE customer_id=?", (customer_id,))
-                t.execute("DELETE FROM bronze.fraud_alerts WHERE customer_id=?", (customer_id,))
-            except Exception as e:
-                logger.warning("Turso erasure cascade error: %s", e)
+                conn.execute("DELETE FROM silver.customers WHERE customer_id=?", (customer_id,))
+                conn.execute("DELETE FROM silver.orders WHERE customer_id=?", (customer_id,))
+                conn.execute("DELETE FROM silver.payments WHERE customer_id=?", (customer_id,))
+                conn.execute("DELETE FROM gold.customer_360 WHERE customer_id=?", (customer_id,))
+                conn.execute("DELETE FROM gold.order_facts WHERE customer_id=?", (customer_id,))
+                conn.execute("DELETE FROM gold.fraud_summary WHERE customer_id=?", (customer_id,))
+                if self._warehouse.table_exists("bronze", "fraud_alerts"):
+                    conn.execute(
+                        "DELETE FROM bronze.fraud_alerts WHERE customer_id=?", (customer_id,)
+                    )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            else:
+                conn.execute("COMMIT")
+
+        if not self._warehouse.turso:
+            return False
+        try:
+            t = self._warehouse.turso
+            t.execute(
+                "UPDATE bronze.orders SET email=?, iban=? WHERE customer_id=?",
+                (ANONYMIZED, ANONYMIZED, customer_id),
+            )
+            t.execute(
+                "UPDATE bronze.payments SET iban=? WHERE customer_id=?",
+                (ANONYMIZED, customer_id),
+            )
+            t.execute(
+                "UPDATE bronze.clicks SET ip_address=? WHERE customer_id=?",
+                (ANONYMIZED, customer_id),
+            )
+            t.execute("DELETE FROM silver.customers WHERE customer_id=?", (customer_id,))
+            t.execute("DELETE FROM silver.orders WHERE customer_id=?", (customer_id,))
+            t.execute("DELETE FROM silver.payments WHERE customer_id=?", (customer_id,))
+            t.execute("DELETE FROM gold.customer_360 WHERE customer_id=?", (customer_id,))
+            t.execute("DELETE FROM gold.order_facts WHERE customer_id=?", (customer_id,))
+            t.execute("DELETE FROM gold.fraud_summary WHERE customer_id=?", (customer_id,))
+            t.execute("DELETE FROM bronze.fraud_alerts WHERE customer_id=?", (customer_id,))
+        except Exception:
+            # Not fatal: DuckDB already holds the erased state and the audit
+            # will show `turso` missing from layers_touched.
+            logger.exception("Turso erasure cascade failed for %s", customer_id)
+            return False
+        return True
 
     def _confirmation_hash(self, request_id: str, customer_id: str) -> str:
         return hashlib.sha256(f"{request_id}:{customer_id}".encode()).hexdigest()[:16]
@@ -243,31 +331,42 @@ class ErasureService:
     def _append_audit(self, audit: ErasureAudit) -> None:
         # DB first (transactional), then file append. If file write fails, DB still has record;
         # on restart the JSONL can be rebuilt from DB. This avoids divergence where file has entry but DB doesn't.
-        self._warehouse.conn.execute(
-            "INSERT INTO governance.erasure_audit_log VALUES (?,?,?,?,?,?,?)",
-            (
-                audit.request_id,
-                audit.customer_id,
-                audit.requested_at,
-                audit.completed_at,
-                ",".join(audit.layers_touched),
-                audit.status,
-                audit.confirmation_hash,
-            ),
+        row = (
+            audit.request_id,
+            audit.customer_id,
+            audit.requested_at,
+            audit.completed_at,
+            ",".join(audit.layers_touched),
+            audit.status,
+            audit.confirmation_hash,
         )
+        with self._warehouse.cursor() as conn:
+            conn.execute("BEGIN TRANSACTION")
+            try:
+                # Replays of the same request must not stack up duplicate
+                # attestations for one DSAR.
+                conn.execute(
+                    "DELETE FROM governance.erasure_audit_log WHERE request_id=?",
+                    (audit.request_id,),
+                )
+                conn.execute(
+                    "INSERT INTO governance.erasure_audit_log VALUES (?,?,?,?,?,?,?)",
+                    row,
+                )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            else:
+                conn.execute("COMMIT")
         if self._warehouse.turso:
             try:
                 self._warehouse.turso.execute(
+                    "DELETE FROM governance.erasure_audit_log WHERE request_id=?",
+                    (audit.request_id,),
+                )
+                self._warehouse.turso.execute(
                     "INSERT INTO governance.erasure_audit_log VALUES (?,?,?,?,?,?,?)",
-                    (
-                        audit.request_id,
-                        audit.customer_id,
-                        audit.requested_at,
-                        audit.completed_at,
-                        ",".join(audit.layers_touched),
-                        audit.status,
-                        audit.confirmation_hash,
-                    ),
+                    row,
                 )
             except Exception as e:
                 logger.warning("Turso audit insert error: %s", e)

@@ -94,13 +94,13 @@ def get_dashboard_html() -> str:
 <div class="p-5 rounded-2xl bg-slate-900 border border-slate-800 relative overflow-hidden">
 <div class="flex justify-between items-start"><p class="text-xs text-slate-400 font-medium">Gold Customer 360</p><span class="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">Curated</span></div>
 <p class="text-3xl font-bold font-mono text-white mt-2" x-text="formatNumber(stats.gold_customers || customers.length || 0)"></p>
-<div class="flex items-center justify-between text-[11px] text-slate-400 mt-2 font-mono"><span>Order Facts: <b class="text-slate-200" x-text="formatNumber(stats.gold_order_facts||0)"></b></span><span>Lake: <b class="text-emerald-400">6 Parquet</b></span></div>
+<div class="flex items-center justify-between text-[11px] text-slate-400 mt-2 font-mono"><span>Order Facts: <b class="text-slate-200" x-text="formatNumber(stats.gold_order_facts||0)"></b></span><span>Lake: <b class="text-emerald-400" x-text="(stats.lake_files || 0) + ' Parquet'"></b></span></div>
 </div>
 
 <div class="p-5 rounded-2xl bg-slate-900 border border-slate-800 relative overflow-hidden">
 <div class="flex justify-between items-start"><p class="text-xs text-slate-400 font-medium">Fraud Caught</p><span class="text-xs px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono">300s Win</span></div>
 <p class="text-3xl font-bold font-mono text-amber-400 mt-2" x-text="fraudAlerts.length"></p>
-<div class="flex items-center justify-between text-[11px] text-slate-400 mt-2 font-mono"><span>Suppressed: <b class="text-rose-400" x-text="suppressedCount"></b></span><span>SLA: <b class="text-slate-200">60s</b></span></div>
+<div class="flex items-center justify-between text-[11px] text-slate-400 mt-2 font-mono"><span>Suppressed: <b class="text-rose-400" x-text="suppressedCount"></b></span><span>SLA: <b class="text-slate-200" x-text="(stats.sla_seconds || 60) + 's'"></b></span></div>
 </div>
 </div>
 
@@ -237,50 +237,42 @@ def get_dashboard_html() -> str:
 </div>
 <button @click="executeErasure()" :disabled="!erasureCustomerId || erasureRunning" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition disabled:opacity-50 flex items-center justify-center gap-2">
 <i class="fa-solid fa-trash-can" :class="erasureRunning ? 'fa-bounce' : ''"></i>
-<span x-text="erasureRunning ? 'Cascading 6 Layers...' : 'Execute Right-to-Erasure Cascade'"></span>
+<span x-text="erasureRunning ? 'Running cascade…' : 'Execute Right-to-Erasure Cascade'"></span>
 </button>
 
 <div x-show="erasureResult" class="p-4 rounded-xl bg-slate-950 border border-emerald-500/30 text-xs font-mono space-y-2">
-<div class="flex items-center justify-between text-emerald-400 font-bold">
-<span><i class="fa-solid fa-circle-check"></i> Cascade Verified</span>
-<span class="text-[10px] text-slate-400" x-text="'Latency: ' + (erasureResult?.latency_seconds || '0.04') + 's'"></span>
+<div class="flex items-center justify-between" :class="erasureResult?.status === 'completed' ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'">
+<span><i class="fa-solid" :class="erasureResult?.status === 'completed' ? 'fa-circle-check' : 'fa-circle-xmark'"></i> <span x-text="erasureResult?.status === 'completed' ? 'Cascade Verified' : 'Cascade Failed'"></span></span>
+<span class="text-[10px] text-slate-400" x-text="'Latency: ' + (erasureResult?.latency_seconds ?? '—') + 's'"></span>
 </div>
 <div class="text-[11px] text-slate-400">Confirmation Hash:</div>
-<div class="p-2 bg-slate-900 rounded-lg text-emerald-300 font-bold break-all text-[11px]" x-text="erasureResult?.confirmation_hash"></div>
-<div class="text-[11px] text-slate-400">Layers touched: <b class="text-slate-200" x-text="(erasureResult?.layers_touched||[]).join(', ') || 'suppression, warehouse, lake'"></b></div>
+<div class="p-2 bg-slate-900 rounded-lg text-emerald-300 font-bold break-all text-[11px]" x-text="erasureResult?.confirmation_hash || '—'"></div>
+<div class="text-[11px] text-slate-400">Layers touched: <b class="text-slate-200" x-text="(erasureResult?.layers_touched||[]).join(', ') || 'none reported'"></b></div>
 </div>
 </div>
 
 <!-- 6-Layer Cascade Visualizer -->
 <div class="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-3 lg:col-span-2">
 <h3 class="text-sm font-semibold text-white flex items-center justify-between">
-<span>6-Layer Cascading Guarantee</span>
-<span class="text-xs text-slate-400 font-mono">SLA: 60s max</span>
+<span>Layered Cascade Guarantee</span>
+<span class="text-xs text-slate-400 font-mono" x-text="'SLA: ' + (stats.sla_seconds || 60) + 's max'"></span>
 </h3>
 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
 <div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-1">
 <div class="flex items-center justify-between text-xs font-mono"><span class="font-bold text-amber-400">1. Suppression Registry</span><i class="fa-solid fa-check text-emerald-400"></i></div>
-<p class="text-[11px] text-slate-400 font-sans">Memory & DB filter blocks all future events across processes.</p>
+<p class="text-[11px] text-slate-400 font-sans">Durable tombstone written first, so a crash mid-cascade leaves the customer suppressed rather than half-erased.</p>
 </div>
 <div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-1">
-<div class="flex items-center justify-between text-xs font-mono"><span class="font-bold text-amber-400">2. Bronze Anonymize</span><i class="fa-solid fa-check text-emerald-400"></i></div>
-<p class="text-[11px] text-slate-400 font-sans">Replaces clear-text email, IBAN, IP with &lt;anonymized&gt;.</p>
+<div class="flex items-center justify-between text-xs font-mono"><span class="font-bold text-amber-400">2. Warehouse Anonymize + Delete</span><i class="fa-solid fa-check text-emerald-400"></i></div>
+<p class="text-[11px] text-slate-400 font-sans">Bronze clear-text PII is overwritten in place; Silver and Gold rows for the customer are deleted in one transaction.</p>
 </div>
 <div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-1">
-<div class="flex items-center justify-between text-xs font-mono"><span class="font-bold text-indigo-400">3. Silver Deletion</span><i class="fa-solid fa-check text-emerald-400"></i></div>
-<p class="text-[11px] text-slate-400 font-sans">Hard DELETE from customers, orders, and payments dimensions.</p>
+<div class="flex items-center justify-between text-xs font-mono"><span class="font-bold text-indigo-400">3. Cloud Replica</span><i class="fa-solid" :class="lastLayers.includes('turso') ? 'fa-check text-emerald-400' : 'fa-minus text-slate-600'"></i></div>
+<p class="text-[11px] text-slate-400 font-sans">Mirrored to Turso when configured; skipped and reported as such when it is not.</p>
 </div>
 <div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-1">
-<div class="flex items-center justify-between text-xs font-mono"><span class="font-bold text-emerald-400">4. Gold Deletion</span><i class="fa-solid fa-check text-emerald-400"></i></div>
-<p class="text-[11px] text-slate-400 font-sans">Removes customer_360, order facts, and fraud summaries.</p>
-</div>
-<div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-1">
-<div class="flex items-center justify-between text-xs font-mono"><span class="font-bold text-rose-400">5. Fraud Alerts Purge</span><i class="fa-solid fa-check text-emerald-400"></i></div>
-<p class="text-[11px] text-slate-400 font-sans">Purges all windowed fraud memory and bronze alerts.</p>
-</div>
-<div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-1">
-<div class="flex items-center justify-between text-xs font-mono"><span class="font-bold text-cyan-400">6. Parquet Lake Re-snapshot</span><i class="fa-solid fa-check text-emerald-400"></i></div>
-<p class="text-[11px] text-slate-400 font-sans">Exports fresh Parquet snapshots so lake has zero stale traces.</p>
+<div class="flex items-center justify-between text-xs font-mono"><span class="font-bold text-emerald-400">4. Parquet Lake Re-snapshot</span><i class="fa-solid" :class="lastLayers.includes('lake') ? 'fa-check text-emerald-400' : 'fa-minus text-slate-600'"></i></div>
+<p class="text-[11px] text-slate-400 font-sans">Fresh de-identified exports, so the lake holds no stale trace of the erased customer.</p>
 </div>
 </div>
 </div>
@@ -302,8 +294,8 @@ def get_dashboard_html() -> str:
 <tr class="hover:bg-slate-800/40">
 <td class="p-3 text-blue-400 font-bold" x-text="e.request_id?.slice(0,8) + '...'"></td>
 <td class="p-3 text-white" x-text="e.customer_id"></td>
-<td class="p-3 text-slate-400" x-text="e.layers_touched || 'suppression, warehouse, lake'"></td>
-<td class="p-3"><span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">COMPLETED</span></td>
+<td class="p-3 text-slate-400" x-text="(e.layers_touched || []).join(', ') || '—'"></td>
+<td class="p-3"><span class="px-2 py-0.5 rounded text-[10px] font-bold" :class="e.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'" x-text="(e.status || 'unknown').toUpperCase()"></span></td>
 <td class="p-3 text-emerald-300 font-bold" x-text="e.confirmation_hash"></td>
 <td class="p-3 text-right text-slate-400 text-[11px]" x-text="formatTime(e.completed_at)"></td>
 </tr>
@@ -358,14 +350,49 @@ def get_dashboard_html() -> str:
 </div>
 </div>
 
-<div x-show="metricsView==='ui'" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-<template x-for="(val, name) in filteredMetricCounters" :key="name">
+<div x-show="metricsView==='ui'" class="space-y-4">
+<div>
+<div class="text-[10px] uppercase font-bold text-blue-400 mb-2 tracking-wider">Counters</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+<template x-for="(val, name) in filteredMetricCounters" :key="'c'+name">
 <div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-1 font-mono">
 <div class="flex justify-between items-center"><span class="text-[10px] text-blue-400 uppercase font-bold">COUNTER</span><span class="text-[10px] text-slate-500">prometheus</span></div>
 <div class="text-xs text-slate-300 font-semibold truncate" :title="name" x-text="name"></div>
 <div class="text-xl font-bold text-white" x-text="val"></div>
 </div>
 </template>
+</div>
+<div x-show="Object.keys(filteredMetricCounters).length===0" class="text-[11px] text-slate-500 font-sans">No counters match.</div>
+</div>
+
+<div>
+<div class="text-[10px] uppercase font-bold text-indigo-400 mb-2 tracking-wider">Gauges</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+<template x-for="(val, name) in filteredMetricGauges" :key="'g'+name">
+<div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-1 font-mono">
+<div class="flex justify-between items-center"><span class="text-[10px] text-indigo-400 uppercase font-bold">GAUGE</span><span class="text-[10px] text-slate-500">prometheus</span></div>
+<div class="text-xs text-slate-300 font-semibold truncate" :title="name" x-text="name"></div>
+<div class="text-xl font-bold text-white" x-text="val"></div>
+</div>
+</template>
+</div>
+<div x-show="Object.keys(filteredMetricGauges).length===0" class="text-[11px] text-slate-500 font-sans">No gauges match.</div>
+</div>
+
+<div>
+<div class="text-[10px] uppercase font-bold text-amber-400 mb-2 tracking-wider">Histograms</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+<template x-for="(val, name) in filteredMetricHistograms" :key="'h'+name">
+<div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-1 font-mono">
+<div class="flex justify-between items-center"><span class="text-[10px] text-amber-400 uppercase font-bold">HISTOGRAM</span><span class="text-[10px] text-slate-500">prometheus</span></div>
+<div class="text-xs text-slate-300 font-semibold truncate" :title="name" x-text="name"></div>
+<div class="text-xl font-bold text-white" x-text="val.count + ' obs'"></div>
+<div class="text-[10px] text-slate-400" x-text="'mean ' + histMean(val).toFixed(4) + ' · sum ' + (val.sum||0).toFixed(3)"></div>
+</div>
+</template>
+</div>
+<div x-show="Object.keys(filteredMetricHistograms).length===0" class="text-[11px] text-slate-500 font-sans">No histograms match.</div>
+</div>
 </div>
 
 <div x-show="metricsView==='raw'" class="space-y-2">
@@ -380,7 +407,11 @@ def get_dashboard_html() -> str:
 <script>
 function dashboard(){
  return {
-  tab:'overview', apiUrl: window.location.origin.includes(':') ? window.location.origin : 'http://localhost:7860',
+  tab:'overview',
+  // Same-origin by default, so a deployed instance (Render, Docker, localhost)
+  // talks to its own API. `?api=` and the header input override it; the old
+  // `includes(':')` test sent every non-local deployment to localhost:7860.
+  apiUrl: new URLSearchParams(window.location.search).get('api') || window.location.origin,
   connected:true, loading:false, actionLoading:false, bannerMessage:'',
   stats:{}, fraudAlerts:[], customers:[], audits:[], dq:[], metricsText:'', rawMetrics:{counters:{}, gauges:{}, histograms:{}},
   backend:'sqlite', watermark:'', goldWatermark:'', lineage:'', suppressedCount:0,
@@ -390,6 +421,11 @@ function dashboard(){
   get filteredAlerts(){
    if(this.fraudFilter==='ALL') return this.fraudAlerts;
    return this.fraudAlerts.filter(a => a.rule === this.fraudFilter);
+  },
+  get lastLayers(){
+   if(this.erasureResult && Array.isArray(this.erasureResult.layers_touched)) return this.erasureResult.layers_touched;
+   const latest = (this.audits || [])[0];
+   return (latest && Array.isArray(latest.layers_touched)) ? latest.layers_touched : [];
   },
   get displayedCustomers(){
    if(!this.customerSearch) return this.customers.slice(0, 30);
@@ -403,6 +439,26 @@ function dashboard(){
     if(!f || k.toLowerCase().includes(f)) out[k] = v;
    }
    return out;
+  },
+  get filteredMetricGauges(){
+   const out = {};
+   const f = this.metricFilter.toLowerCase();
+   for(const [k, v] of Object.entries(this.rawMetrics.gauges || {})){
+    if(!f || k.toLowerCase().includes(f)) out[k] = v;
+   }
+   return out;
+  },
+  get filteredMetricHistograms(){
+   const out = {};
+   const f = this.metricFilter.toLowerCase();
+   for(const [k, v] of Object.entries(this.rawMetrics.histograms || {})){
+    if(!f || k.toLowerCase().includes(f)) out[k] = v;
+   }
+   return out;
+  },
+  histMean(h){
+   if(!h || !h.count) return 0;
+   return (h.sum / h.count);
   },
 
   async init(){
@@ -439,15 +495,15 @@ function dashboard(){
    this.isFetchingTelemetry = true;
    try{
     const [hRes, sRes, faRes] = await Promise.allSettled([
-      fetch(this.apiUrl + '/health').then(r => r.ok ? r.json() : null),
-      fetch(this.apiUrl + '/stats').then(r => r.ok ? r.json() : null),
-      fetch(this.apiUrl + '/fraud_alerts?limit=50').then(r => r.ok ? r.json() : null)
+      this.apiJson('/health'),
+      this.apiJson('/stats'),
+      this.apiJson('/fraud_alerts?limit=50')
     ]);
 
     if(hRes.status === 'fulfilled' && hRes.value){
       this.connected = true;
       this.backend = hRes.value.backend || 'sqlite';
-      this.suppressedCount = (hRes.value.suppressed || []).length;
+      this.suppressedCount = (hRes.value.suppressed || hRes.value.suppressed_customers || 0);
     } else if(hRes.status === 'rejected'){
       this.connected = false;
     }
@@ -470,28 +526,54 @@ function dashboard(){
    }
   },
 
+  // One place where HTTP errors become messages. `r.ok ? r.json() : null`
+  // used to swallow every 4xx/5xx and leave the UI showing stale or empty
+  // data as if nothing had happened.
+  async apiJson(path, opts){
+   const r = await fetch(this.apiUrl + path, opts);
+   if(!r.ok){
+    let detail = r.status + ' ' + r.statusText;
+    try{
+     const body = await r.json();
+     if(body && (body.detail || body.title)) detail = body.detail || body.title;
+    }catch(_){ /* not problem+json */ }
+    throw new Error(detail);
+   }
+   return r.json();
+  },
+  async apiText(path, opts){
+   const r = await fetch(this.apiUrl + path, opts);
+   if(!r.ok) throw new Error(r.status + ' ' + r.statusText);
+   return r.text();
+  },
+
   async fetchTabData(tab){
    const currentTab = tab || this.tab;
    try{
-    if(currentTab === 'medallion'){
-      const c = await fetch(this.apiUrl + '/gold/customer-360?limit=100').then(r => r.ok ? r.json() : null).catch(() => null);
+    if(currentTab === 'overview'){
+      // The consent doughnut and the Customer 360 tile read this.
+      const c = await this.apiJson('/gold/customer-360?limit=100');
+      if(Array.isArray(c)) this.customers = c;
+    } else if(currentTab === 'warehouse'){
+      const c = await this.apiJson('/gold/customer-360?limit=100');
       if(Array.isArray(c)) this.customers = c;
     } else if(currentTab === 'erasure'){
-      const a = await fetch(this.apiUrl + '/governance/erasure-audit').then(r => r.ok ? r.json() : null).catch(() => null);
+      const a = await this.apiJson('/governance/erasure-audit');
       if(Array.isArray(a)) this.audits = a;
-    } else if(currentTab === 'quality'){
-      const q = await fetch(this.apiUrl + '/governance/data_quality_runs?limit=10').then(r => r.ok ? r.json() : null).catch(() => null);
-      if(Array.isArray(q)) this.dq = q;
-    } else if(currentTab === 'metrics'){
-      const [m, mp] = await Promise.allSettled([
-        fetch(this.apiUrl + '/metrics').then(r => r.ok ? r.json() : null),
-        fetch(this.apiUrl + '/metrics/prometheus').then(r => r.ok ? r.text() : null)
+    } else if(currentTab === 'ops'){
+      const [q, m, mp] = await Promise.allSettled([
+        this.apiJson('/governance/data_quality_runs?limit=20'),
+        this.apiJson('/metrics'),
+        this.apiText('/metrics/prometheus')
       ]);
+      if(q.status === 'fulfilled' && Array.isArray(q.value)) this.dq = q.value;
       if(m.status === 'fulfilled' && m.value) this.rawMetrics = m.value;
       if(mp.status === 'fulfilled' && mp.value) this.metricsText = mp.value;
     }
    } catch(e){
-    console.debug('Tab data fetch error:', e);
+    // Surface it: an empty tab must never be indistinguishable from a
+    // tab whose data failed to load.
+    this.bannerMessage = 'Failed to load ' + currentTab + ' data: ' + (e && e.message ? e.message : e);
    }
   },
 
@@ -505,12 +587,12 @@ function dashboard(){
   async triggerProduce(events=100){
    this.actionLoading = true;
    try{
-    const r = await fetch(this.apiUrl + '/produce?events=' + events, {method: 'POST'});
-    const j = await r.json();
-    this.bannerMessage = `Produced ${events} source events onto ${this.backend} bus! Target anomaly: ${j.anom_target}`;
+    const j = await this.apiJson('/produce?events=' + events, {method: 'POST'});
+    this.bannerMessage = `Produced ${j.events_produced ?? events} source events onto ${this.backend} bus` +
+      (j.anom_target ? ` (target anomaly ${j.anom_target})` : '') + '.';
     await this.fetchAll();
    } catch(e){
-    this.bannerMessage = 'Failed to produce events: ' + e;
+    this.bannerMessage = 'Failed to produce events: ' + (e && e.message ? e.message : e);
    } finally {
     this.actionLoading = false;
    }
@@ -519,12 +601,11 @@ function dashboard(){
   async triggerStream(maxEvents=150){
    this.actionLoading = true;
    try{
-    const r = await fetch(this.apiUrl + '/stream?max_events=' + maxEvents, {method: 'POST'});
-    const j = await r.json();
-    this.bannerMessage = `Fraud Stream scored payments! Caught ${j.alerts_emitted} windowed fraud alerts.`;
+    const j = await this.apiJson('/stream?max_events=' + maxEvents, {method: 'POST'});
+    this.bannerMessage = `Fraud stream emitted ${j.alerts_emitted ?? 0} windowed alerts from up to ${maxEvents} payments.`;
     await this.fetchAll();
    } catch(e){
-    this.bannerMessage = 'Failed to run streaming fraud: ' + e;
+    this.bannerMessage = 'Failed to run streaming fraud: ' + (e && e.message ? e.message : e);
    } finally {
     this.actionLoading = false;
    }
@@ -533,12 +614,15 @@ function dashboard(){
   async triggerTransform(incremental=true){
    this.actionLoading = true;
    try{
-    const r = await fetch(this.apiUrl + '/transform?incremental=' + incremental, {method: 'POST'});
-    const j = await r.json();
-    this.bannerMessage = `Medallion transform completed! Incremental: ${incremental}, Quality Gate: OK`;
+    const j = await this.apiJson('/transform?incremental=' + incremental, {method: 'POST'});
+    const tasks = j.tasks || {};
+    const names = Object.keys(tasks);
+    const failed = names.filter(k => !tasks[k].ok);
+    this.bannerMessage = `Medallion transform ${j.status || 'ok'} — ${names.length - failed.length}/${names.length} tasks` +
+      (failed.length ? ` (FAILED: ${failed.join(', ')})` : ' including the quality gate');
     await this.fetchAll();
    } catch(e){
-    this.bannerMessage = 'Failed to run transform: ' + e;
+    this.bannerMessage = 'Failed to run transform: ' + (e && e.message ? e.message : e);
    } finally {
     this.actionLoading = false;
    }
@@ -547,12 +631,13 @@ function dashboard(){
   async triggerQualityGate(){
    this.actionLoading = true;
    try{
-    const r = await fetch(this.apiUrl + '/quality-gate', {method: 'POST'});
-    const j = await r.json();
-    this.bannerMessage = `Data Quality Gate: ${j.all_passed ? 'ALL PASSED' : 'SOME CHECKS FAILED'}`;
+    const j = await this.apiJson('/quality-gate', {method: 'POST'});
+    const failed = (j.results || []).filter(r => !r.passed).map(r => r.check_name);
+    this.bannerMessage = `Data Quality Gate: ${j.all_passed ? 'ALL PASSED' : 'FAILED — ' + failed.join(', ')}`;
     await this.fetchAll();
+    await this.fetchTabData('ops');
    } catch(e){
-    this.bannerMessage = 'Failed to run DQ checks: ' + e;
+    this.bannerMessage = 'Failed to run DQ checks: ' + (e && e.message ? e.message : e);
    } finally {
     this.actionLoading = false;
    }
@@ -562,15 +647,15 @@ function dashboard(){
    this.actionLoading = true;
    const victim = 'cust_attack_' + Math.floor(Math.random()*900+100);
    try{
-    await fetch(this.apiUrl + '/produce?events=30&burst_customer=' + victim, {method: 'POST'});
-    const streamRes = await fetch(this.apiUrl + '/stream?max_events=100', {method: 'POST'}).then(r => r.json());
+    await this.apiJson('/produce?events=30&burst_customer=' + victim, {method: 'POST'});
+    const streamRes = await this.apiJson('/stream?max_events=100', {method: 'POST'});
     const count = streamRes.alerts_emitted || (streamRes.alerts || []).length || 0;
-    this.bannerMessage = `Simulated attack for ${victim}: Detected ${count} real-time fraud alerts!`;
+    this.bannerMessage = `Simulated attack for ${victim}: ${count} real-time fraud alerts detected.`;
     this.fraudFilter = 'ALL';
     await this.fetchAll();
     this.setTab('fraud');
    } catch(e){
-    this.bannerMessage = 'Fraud simulation error: ' + e;
+    this.bannerMessage = 'Fraud simulation error: ' + (e && e.message ? e.message : e);
    } finally {
     this.actionLoading = false;
    }
@@ -580,13 +665,15 @@ function dashboard(){
    if(!this.erasureCustomerId) return;
    this.erasureRunning = true;
    try{
-    const r = await fetch(this.apiUrl + '/erase/' + encodeURIComponent(this.erasureCustomerId), {method: 'POST'});
-    const data = await r.json();
+    const data = await this.apiJson('/erase/' + encodeURIComponent(this.erasureCustomerId), {method: 'POST'});
     this.erasureResult = data;
-    this.bannerMessage = `Right-to-Erasure executed for ${this.erasureCustomerId}! Proof: ${data.confirmation_hash}`;
+    this.bannerMessage = data.status === 'completed'
+      ? `Right-to-Erasure executed for ${this.erasureCustomerId} — proof ${data.confirmation_hash}.`
+      : `Erasure for ${this.erasureCustomerId} did not complete (status: ${data.status}).`;
     await this.fetchAll();
+    await this.fetchTabData('erasure');
    } catch(e){
-    this.bannerMessage = 'Erasure cascade execution failed: ' + e;
+    this.bannerMessage = 'Erasure cascade failed: ' + (e && e.message ? e.message : e);
    } finally {
     this.erasureRunning = false;
    }
@@ -600,16 +687,19 @@ function dashboard(){
    const ingestEl = getCtx('ingestChart');
    if(ingestEl && window.Chart){
     destroyIfExists('ingestChart');
-    const bo = this.stats.bronze_orders || 65;
-    const bp = this.stats.bronze_payments || 50;
-    const bc = this.stats.bronze_clicks || 75;
+    // Real counts, no invented baselines: an empty warehouse plots as zero
+    // rather than as a demo-shaped curve that never existed.
+    const bo = this.stats.bronze_orders || 0;
+    const bp = this.stats.bronze_payments || 0;
+    const bc = this.stats.bronze_clicks || 0;
     new Chart(ingestEl, {
      type: 'line',
      data: {
       labels: ['T-4', 'T-3', 'T-2', 'T-1', 'Now'],
       datasets: [
        { label: 'Orders', data: [Math.round(bo*0.6), Math.round(bo*0.75), Math.round(bo*0.85), Math.round(bo*0.95), bo], borderColor: '#0ea5e9', backgroundColor: 'rgba(14,165,233,0.1)', tension: 0.3, fill: true },
-       { label: 'Payments', data: [Math.round(bp*0.5), Math.round(bp*0.7), Math.round(bp*0.8), Math.round(bp*0.9), bp], borderColor: '#6366f1', backgroundColor: 'transparent', tension: 0.3 }
+       { label: 'Payments', data: [Math.round(bp*0.5), Math.round(bp*0.7), Math.round(bp*0.8), Math.round(bp*0.9), bp], borderColor: '#6366f1', backgroundColor: 'transparent', tension: 0.3 },
+       { label: 'Clicks', data: [Math.round(bc*0.5), Math.round(bc*0.7), Math.round(bc*0.8), Math.round(bc*0.9), bc], borderColor: '#22d3ee', backgroundColor: 'transparent', tension: 0.3 }
       ]
      },
      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10 } } } }, scales: { x: { grid: { display: false }, ticks: { color: '#64748b', font: { size: 10 } } }, y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b', font: { size: 10 } } } } }
@@ -626,9 +716,9 @@ function dashboard(){
      type: 'bar',
      data: {
       labels: ['Velocity', 'Geo Mismatch', 'Amount Z-Score'],
-      datasets: [{ data: [counts.VELOCITY || 4, counts.GEO_MISMATCH || 2, counts.AMOUNT_ZSCORE || 1], backgroundColor: ['#f59e0b', '#3b82f6', '#ec4899'], borderRadius: 6 }]
+      datasets: [{ data: [counts.VELOCITY, counts.GEO_MISMATCH, counts.AMOUNT_ZSCORE], backgroundColor: ['#f59e0b', '#3b82f6', '#ec4899'], borderRadius: 6 }]
      },
-     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, ticks: { color: '#64748b', font: { size: 10 } } }, y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b', font: { size: 10 } } } } }
+     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, ticks: { color: '#64748b', font: { size: 10 } } }, y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b', font: { size: 10 }, precision: 0 } } } }
     });
    }
 
@@ -636,15 +726,17 @@ function dashboard(){
    const consentEl = getCtx('consentChart');
    if(consentEl && window.Chart){
     destroyIfExists('consentChart');
-    const consented = this.customers.filter(c => c.marketing_consent).length || 18;
-    const optout = Math.max(1, this.customers.length - consented) || 6;
+    const consented = this.customers.filter(c => c.marketing_consent).length;
+    const optout = this.customers.length - consented;
     new Chart(consentEl, {
      type: 'doughnut',
      data: {
       labels: ['Consented (Art. 6)', 'Opt-out'],
-      datasets: [{ data: [consented, optout], backgroundColor: ['#10b981', '#334155'], borderWidth: 0 }]
+      // A doughnut of [0,0] renders as an empty ring, which is the truth
+      // before any customer exists — no placeholder slice.
+      datasets: [{ data: this.customers.length ? [consented, optout] : [0, 1], backgroundColor: ['#10b981', '#334155'], borderWidth: 0 }]
      },
-     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', font: { size: 10 }, boxWidth: 10 } } }, cutout: '65%' }
+     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', font: { size: 10 }, boxWidth: 10 } }, tooltip: { enabled: this.customers.length > 0 } }, cutout: '65%' }
     });
    }
   }

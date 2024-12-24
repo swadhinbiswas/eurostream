@@ -7,12 +7,12 @@ A Python reference implementation for streaming fraud detection, medallion analy
 [![CI Pipeline](https://github.com/swadhinbiswas/eurostream/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/swadhinbiswas/eurostream/actions/workflows/ci.yml)
 [![Orchestration DAG](https://github.com/swadhinbiswas/eurostream/actions/workflows/orchestrate.yml/badge.svg?branch=master)](https://github.com/swadhinbiswas/eurostream/actions/workflows/orchestrate.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![Tests Passing](https://img.shields.io/badge/tests-77%20passed-brightgreen?style=flat-square)](https://github.com/swadhinbiswas/eurostream/actions)
+[![Tests Passing](https://img.shields.io/badge/tests-90%20passed-brightgreen?style=flat-square)](https://github.com/swadhinbiswas/eurostream/actions)
 [![Mypy Strict](https://img.shields.io/badge/mypy-strict-2b94ec?style=flat-square)](https://mypy.readthedocs.io)
 [![Ruff](https://img.shields.io/badge/linter-ruff-black?style=flat-square)](https://github.com/astral-sh/ruff)
 [![License: MIT](https://img.shields.io/badge/license-MIT-black?style=flat-square)](LICENSE)
 
-[Live documentation](https://eurostream-docs.pages.dev) · [Public Parquet lake](https://huggingface.co/datasets/swadhinbiswas/eustream) · [JOSS research paper](paper/paper.md) · [Architecture RFC](docs/rfc/0001-platform-design.md)
+[Docs site source](site/README.md) · [Public Parquet lake](https://huggingface.co/datasets/swadhinbiswas/eustream) · [JOSS research paper](paper/paper.md) · [Architecture RFC](docs/rfc/0001-platform-design.md)
 
 </div>
 
@@ -89,12 +89,14 @@ uv run uvicorn eurostream.api:app --reload --port 7860
 Open [http://localhost:7860/](http://localhost:7860/) for the demo dashboard:
 
 - Overview shows warehouse throughput, consent distribution, and fraud rule counts.
-- Fraud Intelligence lists anomaly alerts and supports rule filters.
-- Medallion and 360 provides Customer 360 search and erasure controls.
-- GDPR Art. 17 shows the local erasure flow and confirmation record.
-- Prometheus Explorer provides access to the in-process metrics endpoint.
+- Fraud Detection lists scored anomaly alerts and the rule that fired.
+- Warehouse & 360 provides Customer 360 search, live row counts, and erasure controls.
+- GDPR Right-to-Erasure shows the erasure form, the layered cascade, and the confirmation record.
+- Ops & Prometheus renders the in-process metric snapshot served by `/metrics`.
 
-The API queues erasure requests by default and does not start a worker process. Use synchronous local execution or run a worker separately when testing the queued path. Some dashboard panels are shells because the current tab loader does not populate every view.
+Each tab fetches its own data from the API, and a failed request is written to the dashboard banner with the problem+json `detail` instead of being dropped.
+
+The API runs the erasure worker inside the application lifespan, so `POST /erasure-requests` returns `202 Accepted` and the cascade executes in the background. Send `{"customer_id": "...", "sync": true}` for a blocking `200 OK` with the proof payload. Set `EUROSTREAM_API_TOKEN` to require a bearer token on every mutating endpoint; without it the demo API stays open on purpose.
 
 ## System architecture
 
@@ -154,7 +156,7 @@ Lake re-export is optional. A local hook can regenerate selected Parquet output,
 
 #### Streaming state
 
-The processor can drop future payments for customers present in its suppression snapshot. [`FraudScorer`](file:///home/swadhin/Article17/src/eurostream/streaming.py#L40-L140) keeps history and alert state, but the erasure service does not call an explicit purge method. That state expires during normal processing. The velocity rule uses fixed event-time buckets rather than the sliding-window formula shown in the design material.
+The processor can drop future payments for customers present in its suppression snapshot. [`FraudScorer`](src/eurostream/streaming.py) keeps history and alert state, but the erasure service does not call an explicit purge method. That state expires during normal processing. The velocity rule uses fixed event-time buckets rather than the sliding-window formula shown in the design material.
 
 #### Ephemeral deployments
 
@@ -164,7 +166,7 @@ Container restarts can clear in-memory state and local files. [DuckDB](https://d
 
 The contract command compares event models with the committed baseline and blocks breaking contract drift. It does not classify every column in every Bronze table. A separate transform check samples rows for PII and validates configured European IBAN country and length combinations with the Mod-97 checksum.
 
-The gate is implemented in [`eurostream contracts --baseline governance/contracts.json`](file:///home/swadhin/Article17/src/eurostream/contracts.py#L40-L100).
+The gate is implemented in [`eurostream contracts --baseline governance/contracts.json`](src/eurostream/contracts.py).
 
 ### Six-step request flow
 
@@ -236,18 +238,20 @@ The processor consumes payment events, runs the optional suppression callback, a
    \text{GeoMismatch}(e) = \mathbb{I}(\text{Country}_{\text{billing}} \ne \text{Country}_{\text{merchant}})
    $$
 
-Suppression runs before the rules when the caller supplies a suppression check. A processor with an older suppression snapshot can continue scoring that customer until it receives a refreshed snapshot. The processor implementation is documented in [`FraudStreamProcessor`](file:///home/swadhin/Article17/src/eurostream/streaming.py#L145-L210).
+Suppression runs before the rules when the caller supplies a suppression check. A processor with an older suppression snapshot can continue scoring that customer until it receives a refreshed snapshot. The processor implementation is documented in [`FraudStreamProcessor`](src/eurostream/streaming.py).
 
 ## Data quality and IBAN validation
 
-The [`DataQualityEngine`](file:///home/swadhin/Article17/src/eurostream/quality.py) runs six checks after the medallion transformation:
+The [`DataQualityEngine`](src/eurostream/quality.py) runs these checks after the medallion transformation:
 
 1. `gold.customer_360.customer_id_unique` checks the Gold dimension key for duplicates.
 2. `gold.order_facts.order_id_unique` checks the fact key for duplicates.
-3. `silver.customers.email_hash_not_clear` samples the Silver customer table for clear-text email patterns (`@`).
-4. `silver.customers.iban_hash_not_clear` samples for clear-text IBAN patterns.
-5. `consent_gating` checks that `consents_marketing` matches the upstream `marketing_consent` value.
-6. `gold.order_facts.customer_id_references_gold.customer_360` checks that Gold order customers resolve to the Gold customer dimension.
+3. `silver.customers.email_hash_not_clear` and `silver.customers.iban_hash_not_clear` scan every configured Silver customer column for clear-text email (`@`) and IBAN patterns, reporting `N of M rows` rather than a sample of them.
+4. `consent_gating` checks that `consents_marketing IS DISTINCT FROM marketing_consent` never holds, so a NULL consent cannot pass as a safe opt-out.
+5. `gold.order_facts.customer_id_references_gold.customer_360` checks that Gold order customers resolve to the Gold customer dimension.
+6. `suppression_enforced` checks that no erased customer survives in any of the six Silver and Gold tables.
+
+Every query runs with `local_only=True`, and a check that raises — a missing table, for example — is recorded as a failed check carrying the exception instead of aborting the report.
 
 The PII classifier uses a fixed table of supported European IBAN country and length combinations. A Mod-97 check reduces false positives from regular-expression matching, but it does not validate every IBAN format in Europe.
 
@@ -257,34 +261,25 @@ $$
 
 ## Observability
 
-FastAPI exposes an in-process, Prometheus-shaped view at `/metrics/prometheus`. It has no persistence and does not emit HELP metadata. The design schema is shown below; the running endpoint is authoritative and currently uses names such as `erasure_requested`, `erasure_sla_breach`, `fraud_alert_velocity`, `fraud_alert_amount_zscore`, `fraud_alert_geo_mismatch`, and `erasure_latency_sum` or `erasure_latency_count`.
+FastAPI serves the in-process registry two ways: `/metrics/prometheus` returns the Prometheus text exposition and `/metrics` returns the same snapshot as JSON for the dashboard's Ops tab. A real scrape looks like this:
 
 ```prometheus
-# HELP erasure_requests_total Total GDPR Art. 17 right-to-erasure requests received
-# TYPE erasure_requests_total counter
-erasure_requests_total 42
-
-# HELP erasure_completed_total Total GDPR Art. 17 right-to-erasure requests successfully cascaded
-# TYPE erasure_completed_total counter
-erasure_completed_total 42
-
-# HELP erasure_sla_breaches_total Total erasures exceeding the 60s SLA window
-# TYPE erasure_sla_breaches_total counter
-erasure_sla_breaches_total 0
-
-# HELP fraud_alerts_total Total real-time fraud alerts emitted by rule
-# TYPE fraud_alerts_total counter
-fraud_alerts_total{rule="VELOCITY"} 28
-fraud_alerts_total{rule="AMOUNT_ZSCORE"} 14
-fraud_alerts_total{rule="GEO_MISMATCH"} 19
-
-# HELP erasure_latency_seconds_summary End-to-end erasure cascade latency in seconds
-# TYPE erasure_latency_seconds_summary summary
-erasure_latency_seconds_summary_count 42
-erasure_latency_seconds_summary_sum 1.848
+# HELP eurostream_erasure_sla_breach_total Erasures that finished after the documented SLA.
+# TYPE eurostream_erasure_sla_breach_total counter
+eurostream_erasure_sla_breach_total 1
+# HELP eurostream_http_requests_total HTTP requests handled, by method, path and status.
+# TYPE eurostream_http_requests_total counter
+eurostream_http_requests_total{method="GET",path="/stats",status="200"} 3
+# HELP eurostream_up Whether the process is running.
+# TYPE eurostream_up gauge
+eurostream_up 1
+# HELP eurostream_erasure_latency End-to-end latency of a right-to-erasure request.
+# TYPE eurostream_erasure_latency summary
+eurostream_erasure_latency_sum 687.78
+eurostream_erasure_latency_count 1
 ```
 
-The current counters cover requested and completed erasures, SLA breaches, rule-specific fraud alerts, and latency totals. Fetch `/metrics` for the live names and values.
+Every series carries `# HELP` and `# TYPE`, counters are namespaced `eurostream_*` and suffixed `_total`, the block ends with a newline, and `eurostream_up` is emitted even before the first request so a scrape never returns an empty registry. Beyond HTTP traffic the registry counts erasure requests, failures, SLA breaches, per-rule fraud alerts (`fraud_alert_velocity`, `fraud_alert_amount_zscore`, `fraud_alert_geo_mismatch`), suppressed events, and erasure latency. Snapshots are also appended to `data/logs/metrics.jsonl`.
 
 ## Erasure latency benchmark
 
@@ -320,7 +315,7 @@ The local stack runs without hosted services. Configuration can select optional 
 | Data lake | Local Parquet under `data/lake/*.parquet` | Scheduled Hugging Face upload | `EUROSTREAM_HF_REPO` and `HF_TOKEN` |
 | API and UI | Uvicorn at `http://localhost:7860` | Render or a Docker container on `0.0.0.0:PORT` | `EUROSTREAM_PII_SALT` |
 | Orchestration | Local CLI or cron | GitHub Actions workflow in [`.github/workflows/orchestrate.yml`](.github/workflows/orchestrate.yml) | Scheduled four-hour DAG |
-| Documentation | Astro Starlight with `npm run dev` | Cloudflare Pages | Git push deployment |
+| Documentation | Astro Starlight with `make site-dev` | Cloudflare Pages project `eurostream-docs` via `make site-deploy` | Static build on push |
 
 ### Docker
 
@@ -344,7 +339,7 @@ The gate runs:
 1. Ruff lint: `uv run ruff check src tests`.
 2. Ruff formatting: `uv run ruff format --check src tests`.
 3. Strict mypy for `src/eurostream`: `uv run mypy src/eurostream`, with missing third-party imports ignored by the project configuration.
-4. Pytest: `uv run pytest -q`, with 77 tests covering the local runtime and static Databricks notebook and query contracts.
+4. Pytest: `uv run pytest -q`, with 90 tests covering the local runtime, the HTTP contract, concurrency and suppression regressions, and the static Databricks notebook and query contracts.
 5. Event contract drift: `uv run eurostream contracts --baseline governance/contracts.json`.
 
 The Python gate does not run the separate TypeScript checks for the Databricks application.
@@ -370,7 +365,7 @@ The environment-specific operator guide in `docs/databricks/` is excluded from G
 
 ## Research paper and citation
 
-The repository includes a research software paper prepared for the Journal of Open Source Software (JOSS).
+The repository includes a research software paper prepared for submission to the Journal of Open Source Software (JOSS). It has not been published or peer reviewed, so the citation below carries no DOI.
 
 - [Full paper](paper/paper.md)
 - [BibTeX bibliography](paper/paper.bib)
@@ -378,16 +373,12 @@ The repository includes a research software paper prepared for the Journal of Op
 If you use EuroStream in academic, regulatory, or industrial data engineering research, cite it as:
 
 ```bibtex
-@article{Biswas2026EuroStream,
-  author    = {Swadhin Biswas},
-  title     = {EuroStream: A GDPR-Native Streaming and Medallion Lakehouse Platform for Sovereign European Commerce},
-  journal   = {Journal of Open Source Software},
-  year      = {2026},
-  volume    = {11},
-  number    = {120},
-  pages     = {8942},
-  doi       = {10.21105/joss.08942},
-  url       = {https://github.com/swadhinbiswas/eurostream}
+@software{Biswas2026EuroStream,
+  author  = {Swadhin Biswas},
+  title   = {EuroStream: A GDPR-Native Streaming and Medallion Lakehouse Platform for Sovereign European Commerce},
+  year    = {2026},
+  version = {0.2.0},
+  url     = {https://github.com/swadhinbiswas/eurostream}
 }
 ```
 

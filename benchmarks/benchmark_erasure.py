@@ -112,7 +112,7 @@ def run_benchmark(iterations: int = 50) -> dict[str, float]:
     print(f" Median (p50)      : {stats['median_ms']:.2f} ms")
     print(f" p95 Latency       : {stats['p95_ms']:.2f} ms")
     print(f" Min / Max Latency : {stats['min_ms']:.2f} ms / {stats['max_ms']:.2f} ms")
-    print(f" Statutory SLA     : 60,000 ms (Passed: 100%)")
+    print(" Statutory SLA     : 60,000 ms (Passed: 100%)")
     print("=" * 55 + "\n")
 
     return stats

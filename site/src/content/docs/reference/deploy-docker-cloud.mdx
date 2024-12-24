@@ -11,11 +11,11 @@ The Dockerfile is multi-stage:
 
 - **builder** installs the package into `/opt/venv`
 - **runtime** copies only that venv; runs as non-root `eurostream` user;
-  declares a `HEALTHCHECK` against `/health`; exposes port 8000
+  declares a `HEALTHCHECK` against `/health`; exposes port 7860
 
 ```bash
 docker build -t eurostream .
-docker run --rm -p 8000:8000 eurostream
+docker run --rm -p 7860:7860 eurostream
 ```
 
 The CI pipeline builds this image and **smoke-tests it by running the full
@@ -57,7 +57,7 @@ config:
 ```bash
 EUROSTREAM_EVENT_BUS_BACKEND=kafka \
 EUROSTREAM_PII_SALT="$(aws secretsmanager get-secret-value ...)" \
-uvicorn eurostream.api:app --host 0.0.0.0 --port 8000
+uvicorn eurostream.api:app --host 0.0.0.0 --port 7860
 ```
 
 See the [production playbook](/deep-dives/production-playbook) for the full

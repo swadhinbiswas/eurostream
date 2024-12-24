@@ -1,6 +1,6 @@
 # EuroStream Cookbook — Docs Site
 
-The [EuroStream](https://github.com/swadhin/eurostream) engineering cookbook:
+The [EuroStream](https://github.com/swadhinbiswas/eurostream) engineering cookbook:
 how the platform was built, why every decision was made, and how to defend it
 in an interview.
 

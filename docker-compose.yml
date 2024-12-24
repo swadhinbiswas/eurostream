@@ -3,7 +3,7 @@ services:
     build: .
     image: eurostream:latest
     ports:
-      - "8000:8000"
+      - "7860:7860"
     environment:
       EUROSTREAM_DATA_DIR: /app/data
       EUROSTREAM_WAREHOUSE_PATH: /app/data/eurocart.duckdb
@@ -12,7 +12,7 @@ services:
       - eurostream-data:/app/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7860/health')"]
       interval: 15s
       timeout: 5s
       retries: 5

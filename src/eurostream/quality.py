@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from eurostream.warehouse import Warehouse
@@ -13,6 +14,22 @@ def _safe_identifier(name: str) -> str:
     if not _IDENTIFIER.match(name):
         raise ValueError(f"not a safe identifier: {name}")
     return name
+
+
+def _count(row: dict[str, object], key: str) -> int:
+    """Read an aggregate column as int. Rows are ``dict[str, object]``, so the
+    conversion is explicit rather than asserted away."""
+    value = row.get(key)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
 
 
 @dataclass
@@ -34,27 +51,73 @@ class DQReport:
 
 class DataQualityEngine:
     """The governance gate: uniqueness, referential integrity, PII-not-in-
-    clear-text, and consent-gating checks. Results are recorded to the
-    warehouse and fail the DAG when any check fails."""
+    clear-text, consent-gating and suppression enforcement. Results are
+    recorded to the warehouse and fail the DAG when any check fails.
+
+    Every verdict is computed with ``local_only=True``: a quality gate that
+    answers from a cloud replica is not a gate on the data in front of it.
+    """
 
     PII_FIELDS = {
         "silver.customers": ["email_hash", "iban_hash"],
     }
     HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+    #: The same pattern, as SQL source. Kept out of the f-string above so the
+    #: ``{64}`` quantifier is not mistaken for a format field.
+    HASH_SQL = "^[0-9a-f]{64}$"
+
+    #: Tables that must contain no suppressed (erased) customer.
+    SUPPRESSION_TABLES = (
+        "silver.customers",
+        "silver.orders",
+        "silver.payments",
+        "gold.customer_360",
+        "gold.order_facts",
+        "gold.fraud_summary",
+    )
 
     def __init__(self, warehouse: Warehouse) -> None:
         self._warehouse = warehouse
 
     def run_all(self) -> DQReport:
         report = DQReport(run_id=str(uuid.uuid4()))
-        report.results += self._check_uniqueness("gold.customer_360", "customer_id")
-        report.results += self._check_uniqueness("gold.order_facts", "order_id")
-        for table, columns in self.PII_FIELDS.items():
-            report.results += self._check_pii_not_clear(table, columns)
-        report.results += self._check_consent_gated()
-        report.results += self._check_referential_integrity(
-            "gold.order_facts", "customer_id", "gold.customer_360", "customer_id"
-        )
+        groups: list[tuple[str, Callable[[], list[DQCheckResult]]]] = [
+            (
+                "gold.customer_360.customer_id_unique",
+                lambda: self._check_uniqueness("gold.customer_360", "customer_id"),
+            ),
+            (
+                "gold.order_facts.order_id_unique",
+                lambda: self._check_uniqueness("gold.order_facts", "order_id"),
+            ),
+            (
+                "pii_not_clear",
+                lambda: sum(
+                    (
+                        self._check_pii_not_clear(table, columns)
+                        for table, columns in self.PII_FIELDS.items()
+                    ),
+                    [],
+                ),
+            ),
+            ("consent_gating", self._check_consent_gated),
+            (
+                "gold.order_facts.customer_id_references_gold.customer_360",
+                lambda: self._check_referential_integrity(
+                    "gold.order_facts", "customer_id", "gold.customer_360", "customer_id"
+                ),
+            ),
+            ("suppression_enforced", self._check_suppression_enforced),
+        ]
+        for name, check in groups:
+            try:
+                report.results += check()
+            except Exception as exc:  # noqa: BLE001 - a broken check is a failed check
+                # A gate that raises on a missing table would take the whole
+                # report down with it; record the failure and keep going.
+                report.results.append(
+                    DQCheckResult(name, False, f"check could not run: {type(exc).__name__}: {exc}")
+                )
         for result in report.results:
             self._warehouse.record_dq(
                 report.run_id, result.check_name, result.passed, result.detail
@@ -65,7 +128,8 @@ class DataQualityEngine:
         _safe_identifier(table)
         _safe_identifier(column)
         rows = self._warehouse.query(
-            f"SELECT {column}, count(*) c FROM {table} GROUP BY {column} HAVING count(*) > 1"  # noqa: S608
+            f"SELECT {column}, count(*) c FROM {table} GROUP BY {column} HAVING count(*) > 1",  # noqa: S608
+            local_only=True,
         )
         ok = len(rows) == 0
         return [
@@ -77,25 +141,46 @@ class DataQualityEngine:
         ]
 
     def _check_pii_not_clear(self, table: str, columns: list[str]) -> list[DQCheckResult]:
+        """Assert the whole column is hashed, not the first 50 rows of it.
+
+        The previous version sampled with ``LIMIT 50``, so a single clear-text
+        PII value at row 51 passed the gate. The verdict is now aggregated in
+        SQL over every non-NULL value and reports how many rows leaked.
+        """
         results: list[DQCheckResult] = []
         schema, name = table.split(".")
         for col in columns:
             if not self._warehouse.table_exists(schema, name):
+                # The table this check protects is missing — that is a failure,
+                # not a check to skip. Silently passing hides an unbuilt layer.
+                results.append(
+                    DQCheckResult(
+                        f"{table}.{col}_not_clear",
+                        False,
+                        f"table {table} does not exist",
+                    )
+                )
                 continue
             _safe_identifier(col)
-            sample = self._warehouse.query(
-                f"SELECT {col} FROM {table} WHERE {col} IS NOT NULL LIMIT 50"  # noqa: S608
-            )
-            leaked = any(
-                (val := r[col]) is not None
-                and ("@" in str(val) or not self.HASH_RE.match(str(val)))
-                for r in sample
-            )
+            # f-string with HASH_SQL interpolated (not inlined) so the ``{64}``
+            # quantifier is data, not a format field.
+            sql = f"""
+                SELECT count(*) AS total,
+                       count(*) FILTER (
+                           WHERE {col} IS NOT NULL
+                             AND (strpos({col}::VARCHAR, '@') > 0
+                                  OR NOT regexp_matches({col}::VARCHAR, '{self.HASH_SQL}'))
+                       ) AS leaked
+                FROM {table}
+                """  # noqa: S608 - identifiers validated above
+            row = self._warehouse.query(sql, local_only=True)[0]
+            total = _count(row, "total")
+            leaked = _count(row, "leaked")
             results.append(
                 DQCheckResult(
                     f"{table}.{col}_not_clear",
-                    not leaked,
-                    "clear-text or non-hashed PII detected" if leaked else "",
+                    leaked == 0,
+                    f"{leaked} of {total} rows hold clear-text or non-hashed PII" if leaked else "",
                 )
             )
         return results
@@ -104,16 +189,28 @@ class DataQualityEngine:
         """Consent mirror integrity: ``consents_marketing`` in the marketing
         view of customer_360 must equal the source ``marketing_consent`` flag
         for every row, so a customer who opted out can never be selected into
-        a marketing segment — even if the Gold build is later changed."""
+        a marketing segment — even if the Gold build is later changed.
+
+        ``IS DISTINCT FROM`` rather than ``<>``: with ``<>`` a NULL in either
+        column makes the predicate NULL, the row is never counted, and a
+        customer whose consent became unknown passes the gate as if they had
+        opted out safely.
+        """
         rows = self._warehouse.query(
-            "SELECT count(*) c FROM gold.customer_360 WHERE consents_marketing <> marketing_consent"
+            "SELECT count(*) AS c FROM gold.customer_360 "
+            "WHERE consents_marketing IS DISTINCT FROM marketing_consent "
+            "   OR consents_marketing IS NULL",
+            local_only=True,
         )
-        ok = rows[0]["c"] == 0
+        mismatched = _count(rows[0], "c")
+        ok = mismatched == 0
         return [
             DQCheckResult(
                 "consent_gating",
                 ok,
-                f"{rows[0]['c']} customers where consents_marketing != marketing_consent",
+                f"{mismatched} customers where consents_marketing != marketing_consent (or is NULL)"
+                if not ok
+                else "",
             )
         ]
 
@@ -126,13 +223,43 @@ class DataQualityEngine:
         _safe_identifier(ref_col)
         rows = self._warehouse.query(
             f"SELECT count(*) c FROM {table} t LEFT JOIN {ref_table} r "  # noqa: S608
-            f"ON t.{col} = r.{ref_col} WHERE r.{ref_col} IS NULL"
+            f"ON t.{col} = r.{ref_col} WHERE r.{ref_col} IS NULL",
+            local_only=True,
         )
-        ok = rows[0]["c"] == 0
+        orphans = _count(rows[0], "c")
         return [
             DQCheckResult(
                 f"{table}.{col}_references_{ref_table}",
-                ok,
-                f"{rows[0]['c']} orphans",
+                orphans == 0,
+                f"{orphans} orphans",
             )
         ]
+
+    def _check_suppression_enforced(self) -> list[DQCheckResult]:
+        """No suppressed (erased) customer may remain in Silver or Gold.
+
+        This is the check that catches the resurrection bug: the deletion
+        cascade tombstones a customer in ``governance.suppression_registry``,
+        but any rebuild that forgets the anti-join puts them straight back.
+        The gate must notice, not the Data Subject.
+        """
+        results: list[DQCheckResult] = []
+        for table in self.SUPPRESSION_TABLES:
+            _safe_identifier(table)
+            rows = self._warehouse.query(
+                f"SELECT count(*) AS c FROM {table} t "  # noqa: S608
+                "JOIN governance.suppression_registry s "
+                "ON t.customer_id = s.customer_id",
+                local_only=True,
+            )
+            leaked = _count(rows[0], "c")
+            results.append(
+                DQCheckResult(
+                    f"{table}_no_suppressed_customers",
+                    leaked == 0,
+                    f"{leaked} suppressed customers present — erasure did not hold"
+                    if leaked
+                    else "",
+                )
+            )
+        return results

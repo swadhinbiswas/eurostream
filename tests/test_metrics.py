@@ -31,5 +31,14 @@ def test_metrics_flush_and_render(tmp_path):
     text = path.read_text()
     assert "c" in text
     prom = m.render_prometheus()
-    assert "# TYPE c counter" in prom
-    assert "c 5" in prom
+    # Counters are suffixed _total and carry HELP/TYPE headers per the
+    # Prometheus text exposition format.
+    assert "# HELP eurostream_c_total c" in prom
+    assert "# TYPE eurostream_c_total counter" in prom
+    assert "eurostream_c_total 5" in prom
+    # The baseline `up` gauge makes an empty scrape distinguishable from a
+    # dead exporter.
+    assert "# TYPE eurostream_up gauge" in prom
+    assert "eurostream_up 1" in prom
+    # Every scrape body ends in a newline, as the format requires.
+    assert prom.endswith("\n")

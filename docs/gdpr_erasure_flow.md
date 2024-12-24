@@ -19,7 +19,7 @@ A data subject (or the DSAR team on their behalf) submits a request through the
 API:
 
 ```bash
-curl -X POST http://localhost:8000/erasure-requests \
+curl -X POST http://localhost:7860/erasure-requests \
   -H 'Content-Type: application/json' \
   -d '{"customer_id": "cust_424242"}'
 ```
@@ -102,7 +102,7 @@ Audit records are written to two places:
 ### Querying the audit log
 
 ```bash
-curl http://localhost:8000/governance/erasure-audit
+curl http://localhost:7860/governance/erasure-audit
 ```
 
 Returns all erasure records ordered by completion time, newest first.
@@ -116,7 +116,7 @@ the cascade takes longer than the SLA.
 You can check SLA health via the metrics endpoint:
 
 ```bash
-curl http://localhost:8000/metrics
+curl http://localhost:7860/metrics
 ```
 
 Look for `erasure_latency` (the last execution time) and `erasure_sla_breach`
@@ -167,11 +167,12 @@ The verification passes when all three conditions are met.
 
 | What | Where |
 |------|-------|
-| Erasure request API endpoint | `src/eurostream/api.py:25` |
-| `ErasureService` class | `src/eurostream/governance/erasure.py:41` |
-| `request_erasure()` — enqueues tombstone | `src/eurostream/governance/erasure.py:80` |
-| `execute()` — runs the full cascade | `src/eurostream/governance/erasure.py:102` |
-| `_anonymize_warehouse()` — Bronze/Silver/Gold operations | `src/eurostream/governance/erasure.py:154` |
-| `_confirmation_hash()` — SHA-256 tamper evidence | `src/eurostream/governance/erasure.py:177` |
-| `is_suppressed()` — streaming suppression check | `src/eurostream/governance/erasure.py:130` |
+| Erasure request API endpoint | `ErasureService` usage in `src/eurostream/api.py` |
+| `ErasureService` class | `src/eurostream/governance/erasure.py` |
+| `request_erasure()` — enqueues the tombstone | `src/eurostream/governance/erasure.py` |
+| `execute()` — runs the full cascade and writes the audit row | `src/eurostream/governance/erasure.py` |
+| `_anonymize_warehouse()` — Bronze/Silver/Gold operations | `src/eurostream/governance/erasure.py` |
+| `_confirmation_hash()` — SHA-256 tamper evidence | `src/eurostream/governance/erasure.py` |
+| `is_suppressed()` — streaming suppression check | `src/eurostream/governance/erasure.py` |
+| Suppression-aware medallion builds | `src/eurostream/warehouse.py` |
 | Erasure tests | `tests/test_erasure.py` |

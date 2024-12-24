@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import functools
 import logging
 import os
+import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import duckdb
 
@@ -17,6 +20,32 @@ from eurostream.types import Manifest, Row
 
 logger = logging.getLogger(__name__)
 
+_R = TypeVar("_R")
+
+
+def synchronized(method: Callable[..., _R]) -> Callable[..., _R]:
+    """Serialize a ``Warehouse`` method against the shared DuckDB connection.
+
+    ``duckdb.connect()`` hands back the connection object itself, so
+    ``conn.execute(sql)`` and ``result.fetchall()`` are *two* calls on one
+    handle. FastAPI runs sync routes in a thread pool, which means another
+    request's ``execute()`` can land between them and this caller reads the
+    other request's rows — silently, with a 200. Every public method holds
+    the reentrant lock for its whole body so execute+fetch stays atomic.
+
+    The decorator is signature-preserving so ``mypy --strict`` still sees the
+    real return type of each method it wraps.
+    """
+
+    @functools.wraps(method)
+    def wrapper(*args: Any, **kwargs: Any) -> _R:
+        warehouse = args[0]
+        with warehouse._lock:
+            return method(*args, **kwargs)
+
+    return wrapper
+
+
 BRONZE_SCHEMA = "bronze"
 SILVER_SCHEMA = "silver"
 GOLD_SCHEMA = "gold"
@@ -26,6 +55,22 @@ GOVERNANCE_SCHEMA = "governance"
 def _rows_to_dicts(result: Any) -> list[Row]:
     columns = [desc[0] for desc in result.description]
     return [dict(zip(columns, row, strict=True)) for row in result.fetchall()]
+
+
+def _not_suppressed(alias: str) -> str:
+    """Anti-join predicate that keeps erased customers out of analytical layers.
+
+    Bronze is append-only and keeps ``customer_id`` on purpose (erasure
+    rewrites it in place), so any rebuild from Bronze would otherwise
+    resurrect a customer the moment the DAG runs again. Every Silver/Gold
+    build must filter through ``governance.suppression_registry``.
+    """
+    if not alias.isidentifier():
+        raise ValueError(f"unsafe SQL alias: {alias!r}")
+    return (
+        "NOT EXISTS (SELECT 1 FROM governance.suppression_registry s "
+        f"WHERE s.customer_id = {alias}.customer_id)"
+    )
 
 
 CREATE_BRONZE = """
@@ -119,6 +164,8 @@ class Warehouse:
     ) -> None:
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        # Reentrant: build_* methods call other locked helpers internally.
+        self._lock = threading.RLock()
         # Primary: DuckDB file (always, for Parquet lake + local dev)
         self.conn = duckdb.connect(str(self._path))
         self._init_schema()
@@ -145,12 +192,14 @@ class Warehouse:
                     logger.warning("Turso connect failed (falling back to DuckDB only): %s", e)
                     self.turso = None
 
+    @synchronized
     def _init_schema(self) -> None:
         for schema in (BRONZE_SCHEMA, SILVER_SCHEMA, GOLD_SCHEMA, GOVERNANCE_SCHEMA):
             self.conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema};")
         for ddl in (CREATE_BRONZE, CREATE_SILVER, CREATE_GOLD, CREATE_GOVERNANCE):
             self.conn.execute(ddl)
 
+    @synchronized
     def close(self) -> None:
         if self.turso:
             try:
@@ -159,6 +208,7 @@ class Warehouse:
                 logger.debug("Turso close error: %s", e)
         self.conn.close()
 
+    @synchronized
     def sync_table_to_turso(self, table: str) -> None:
         """Syncs all rows of a DuckDB table to Turso via batch INSERT OR REPLACE."""
         if not self.turso:
@@ -184,34 +234,24 @@ class Warehouse:
         except Exception as e:
             logger.warning("Turso sync error for %s: %s", table, e)
 
+    @synchronized
     def sync_all_to_turso(self) -> None:
         """Syncs all Medallion and Governance tables from DuckDB to Turso."""
         if not self.turso:
             return
-        for tbl in [
-            "bronze.orders",
-            "bronze.clicks",
-            "bronze.payments",
-            "bronze.fraud_alerts",
-            "silver.customers",
-            "silver.orders",
-            "silver.payments",
-            "gold.customer_360",
-            "gold.order_facts",
-            "gold.fraud_summary",
-            "governance.erasure_audit_log",
-            "governance.pii_manifest",
-            "governance.data_quality_runs",
-            "governance.suppression_registry",
-            "governance.watermarks",
-        ]:
+        for tbl in self.TURSO_TABLES:
             self.sync_table_to_turso(tbl)
 
+    @synchronized
     def seed_from_lake(self, hf_repo: str = "swadhinbiswas/eustream") -> dict[str, int]:
         """Loads Parquet tables from Hugging Face lake into DuckDB if local tables are empty,
         then syncs them to Turso."""
         loaded: dict[str, int] = {}
-        hf_base = f"hf://datasets/{hf_repo}"
+        # `hf_repo` lands inside a SQL string literal; keep it to a safe charset.
+        repo = hf_repo.strip().strip("\"' \t\r\n")
+        if not repo or not all(c.isalnum() or c in "-_./" for c in repo):
+            raise ValueError(f"unsafe hugging face repo id: {hf_repo!r}")
+        hf_base = f"hf://datasets/{repo}"
         mapping = {
             "silver.customers": f"{hf_base}/silver/customers.parquet",
             "silver.orders": f"{hf_base}/silver/orders.parquet",
@@ -220,14 +260,20 @@ class Warehouse:
             "gold.order_facts": f"{hf_base}/gold/order_facts.parquet",
             "gold.fraud_summary": f"{hf_base}/gold/fraud_summary.parquet",
         }
+        keep = _not_suppressed("r")
         for table, parquet_url in mapping.items():
             try:
-                cnt = self.scalar(f"SELECT count(*) FROM {table}")
+                cnt = self.scalar(f"SELECT count(*) FROM {table}", local_only=True)
                 if cnt == 0:
+                    # Rehydration must never restore an erased customer.
                     self.conn.execute(
-                        f"INSERT OR IGNORE INTO {table} SELECT * FROM read_parquet('{parquet_url}')"  # noqa: S608
+                        f"""
+                        INSERT OR IGNORE INTO {table}
+                        SELECT * FROM read_parquet('{parquet_url}') r
+                        WHERE {keep}
+                        """  # noqa: S608
                     )
-                    loaded[table] = self.scalar(f"SELECT count(*) FROM {table}")
+                    loaded[table] = self.scalar(f"SELECT count(*) FROM {table}", local_only=True)
                     if self.turso:
                         self.sync_table_to_turso(table)
             except Exception as e:
@@ -236,6 +282,7 @@ class Warehouse:
 
     # ---- Bronze (raw append) ----
 
+    @synchronized
     def append_order(self, order: OrderPlaced) -> None:
         now = time.time()
         self.conn.execute(
@@ -277,6 +324,7 @@ class Warehouse:
             except Exception as e:
                 logger.debug("Turso append_order error: %s", e)
 
+    @synchronized
     def append_click(self, click: PageClick) -> None:
         now = time.time()
         self.conn.execute(
@@ -314,6 +362,7 @@ class Warehouse:
             except Exception as e:
                 logger.debug("Turso append_click error: %s", e)
 
+    @synchronized
     def append_payment(self, payment: PaymentProcessed) -> None:
         now = time.time()
         self.conn.execute(
@@ -355,6 +404,7 @@ class Warehouse:
             except Exception as e:
                 logger.debug("Turso append_payment error: %s", e)
 
+    @synchronized
     def bronze_rows(self, table: str, limit: int | None = None) -> list[Row]:
         statements = {
             "orders": "SELECT * FROM bronze.orders",
@@ -378,6 +428,7 @@ class Warehouse:
                 logger.debug("Turso bronze_rows error: %s", e)
         return rows
 
+    @synchronized
     def load_bronze_from_records(self, topic: str, records: Sequence[Record]) -> None:
         """Loads bus records for a topic into the corresponding Bronze table.
         Mirrors the bronze_ingest task of the deployment DAG."""
@@ -474,6 +525,7 @@ class Warehouse:
 
     # ---- Silver (dedup, typed, PII-masked) ----
 
+    @synchronized
     def build_silver(self, pii_salt: str = PII_SALT) -> None:
         """Rebuilds Silver from Bronze.
 
@@ -482,36 +534,39 @@ class Warehouse:
         warehouse and the governance library stay interoperable.
         """
         salt = pii_salt.replace("'", "''")
+        keep = _not_suppressed("o")
         self.conn.execute(
             f"""
             DELETE FROM silver.customers;
             INSERT INTO silver.customers (customer_id, email_hash, iban_hash, name_hash, country,
                                           marketing_consent, first_seen, last_seen)
             SELECT
-                customer_id,
-                sha256('{salt}:' || arg_max(email, occurred_at)) as email_hash,
-                sha256('{salt}:' || arg_max(iban, occurred_at)) as iban_hash,
+                o.customer_id,
+                sha256('{salt}:' || arg_max(o.email, o.occurred_at)) as email_hash,
+                sha256('{salt}:' || arg_max(o.iban, o.occurred_at)) as iban_hash,
                 NULL as name_hash,
-                min(country),
-                bool_and(marketing_consent),
-                min(occurred_at), max(occurred_at)
-            FROM bronze.orders
-            GROUP BY customer_id;
+                min(o.country),
+                bool_and(o.marketing_consent),
+                min(o.occurred_at), max(o.occurred_at)
+            FROM bronze.orders o
+            WHERE {keep}
+            GROUP BY o.customer_id;
             """
         )
         self.conn.execute(
-            """
+            f"""
             DELETE FROM silver.orders;
             INSERT INTO silver.orders (order_id, customer_id, amount_eur, country, occurred_at, dedup_count)
             SELECT order_id, customer_id, amount_eur, country, occurred_at, 1
             FROM (
                 SELECT *, row_number() OVER (PARTITION BY order_id ORDER BY occurred_at) rn
                 FROM bronze.orders
-            ) WHERE rn = 1;
+            ) x
+            WHERE x.rn = 1 AND {_not_suppressed("x")};
             """
         )
         self.conn.execute(
-            """
+            f"""
             DELETE FROM silver.payments;
             INSERT INTO silver.payments (payment_id, order_id, customer_id, amount_eur, country,
                                          merchant_country, status, occurred_at, dedup_count)
@@ -520,7 +575,8 @@ class Warehouse:
             FROM (
                 SELECT *, row_number() OVER (PARTITION BY payment_id ORDER BY occurred_at) rn
                 FROM bronze.payments
-            ) WHERE rn = 1;
+            ) y
+            WHERE y.rn = 1 AND {_not_suppressed("y")};
             """
         )
         # Advance watermarks for incremental path
@@ -538,9 +594,10 @@ class Warehouse:
 
     # ---- Gold (consent-aware aggregates) ----
 
+    @synchronized
     def build_gold(self) -> None:
         self.conn.execute(
-            """
+            f"""
             DELETE FROM gold.customer_360;
             INSERT INTO gold.customer_360
             SELECT
@@ -558,23 +615,27 @@ class Warehouse:
                 SELECT customer_id, COUNT(*) > 0 as fraud_flag
                 FROM bronze.fraud_alerts GROUP BY customer_id
             ) f ON c.customer_id = f.customer_id
+            WHERE {_not_suppressed("c")}
             GROUP BY c.customer_id, c.marketing_consent, c.last_seen, f.fraud_flag;
             """
         )
         self.conn.execute(
-            """
+            f"""
             DELETE FROM gold.order_facts;
             INSERT INTO gold.order_facts
-            SELECT order_id, customer_id, amount_eur, country, occurred_at FROM silver.orders;
+            SELECT so.order_id, so.customer_id, so.amount_eur, so.country, so.occurred_at
+            FROM silver.orders so
+            WHERE {_not_suppressed("so")};
             """
         )
         self.conn.execute(
-            """
+            f"""
             DELETE FROM gold.fraud_summary;
             INSERT INTO gold.fraud_summary
-            SELECT customer_id, rule, COUNT(*) as alert_count, MAX(alert_ts) as last_alert
-            FROM bronze.fraud_alerts
-            GROUP BY customer_id, rule;
+            SELECT fa.customer_id, fa.rule, COUNT(*) as alert_count, MAX(fa.alert_ts) as last_alert
+            FROM bronze.fraud_alerts fa
+            WHERE {_not_suppressed("fa")}
+            GROUP BY fa.customer_id, fa.rule;
             """
         )
         row = self.conn.execute("SELECT max(last_seen) FROM silver.customers").fetchone()
@@ -589,6 +650,7 @@ class Warehouse:
             self.sync_table_to_turso("gold.fraud_summary")
             self.sync_table_to_turso("governance.watermarks")
 
+    @synchronized
     def table_exists(self, schema: str, table: str) -> bool:
         row = self.conn.execute(
             "SELECT count(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
@@ -600,6 +662,7 @@ class Warehouse:
 
     # ---- Watermarks for incremental pipelines ----
 
+    @synchronized
     def get_watermark(self, pipeline: str) -> float:
         row = self.conn.execute(
             "SELECT last_ts FROM governance.watermarks WHERE pipeline=?", (pipeline,)
@@ -617,6 +680,7 @@ class Warehouse:
                 logger.debug("Turso get_watermark error: %s", e)
         return 0.0
 
+    @synchronized
     def set_watermark(self, pipeline: str, ts: float) -> None:
         self.conn.execute(
             "INSERT OR REPLACE INTO governance.watermarks VALUES (?,?)", (pipeline, ts)
@@ -629,13 +693,15 @@ class Warehouse:
             except Exception as e:
                 logger.debug("Turso set_watermark error: %s", e)
 
+    @synchronized
     def build_silver_incremental(self, pii_salt: str = PII_SALT) -> dict[str, int]:
         """Incremental Silver build: only re-process customers with new Bronze rows."""
         watermark = self.get_watermark("silver")
         affected_rows = self.conn.execute(
             "SELECT DISTINCT customer_id FROM bronze.orders WHERE occurred_at > ?", (watermark,)
         ).fetchall()
-        affected = [r[0] for r in affected_rows]
+        suppressed = set(self.suppressed_ids())
+        affected = [r[0] for r in affected_rows if r[0] not in suppressed]
         if not affected:
             return {"customers": 0, "orders": 0, "payments": 0}
 
@@ -661,29 +727,33 @@ class Warehouse:
             """,
             affected,
         )
-        self.conn.execute(
-            """
+        orders = self.conn.execute(
+            f"""
             INSERT OR IGNORE INTO silver.orders (order_id, customer_id, amount_eur, country, occurred_at, dedup_count)
             SELECT order_id, customer_id, amount_eur, country, occurred_at, 1
             FROM (
                 SELECT *, row_number() OVER (PARTITION BY order_id ORDER BY occurred_at) rn
                 FROM bronze.orders WHERE occurred_at > ?
-            ) WHERE rn = 1;
+            ) x
+            WHERE x.rn = 1 AND {_not_suppressed("x")}
+            RETURNING 1;
             """,
             (watermark,),
-        )
-        self.conn.execute(
-            """
+        ).fetchall()
+        payments = self.conn.execute(
+            f"""
             INSERT OR IGNORE INTO silver.payments (payment_id, order_id, customer_id, amount_eur, country,
                                                    merchant_country, status, occurred_at, dedup_count)
             SELECT payment_id, order_id, customer_id, amount_eur, country, merchant_country, status, occurred_at, 1
             FROM (
                 SELECT *, row_number() OVER (PARTITION BY payment_id ORDER BY occurred_at) rn
                 FROM bronze.payments WHERE occurred_at > ?
-            ) WHERE rn = 1;
+            ) y
+            WHERE y.rn = 1 AND {_not_suppressed("y")}
+            RETURNING 1;
             """,
             (watermark,),
-        )
+        ).fetchall()
         row = self.conn.execute("SELECT max(occurred_at) FROM bronze.orders").fetchone()
         max_ts = row[0] if row else None
         if max_ts:
@@ -695,8 +765,13 @@ class Warehouse:
             self.sync_table_to_turso("silver.payments")
             self.sync_table_to_turso("governance.watermarks")
 
-        return {"customers": len(affected), "orders": 0, "payments": 0}
+        return {
+            "customers": len(affected),
+            "orders": len(orders),
+            "payments": len(payments),
+        }
 
+    @synchronized
     def build_gold_incremental(self) -> dict[str, int]:
         """Incremental Gold: recompute only customers touched in Silver since last Gold watermark."""
         watermark = self.get_watermark("gold")
@@ -711,53 +786,67 @@ class Warehouse:
         affected = [r[0] for r in affected_rows]
         if not affected:
             return {"customers": 0}
+        suppressed = set(self.suppressed_ids())
         placeholders = ",".join("?" for _ in affected)
+        # Always delete: a customer erased since the last run must lose their
+        # Gold row even though the rebuild below will refuse to recreate it.
         self.conn.execute(
             f"DELETE FROM gold.customer_360 WHERE customer_id IN ({placeholders})", affected
         )
         self.conn.execute(
-            f"""
-            INSERT INTO gold.customer_360
-            SELECT
-                c.customer_id,
-                COUNT(DISTINCT o.order_id) as total_orders,
-                COALESCE(SUM(o.amount_eur), 0) as total_spend_eur,
-                COALESCE(AVG(o.amount_eur), 0) as avg_order_value_eur,
-                c.marketing_consent,
-                COALESCE(f.fraud_flag, FALSE) as fraud_flag,
-                c.last_seen,
-                c.marketing_consent as consents_marketing
-            FROM silver.customers c
-            LEFT JOIN silver.orders o ON c.customer_id = o.customer_id
-            LEFT JOIN (
-                SELECT customer_id, COUNT(*) > 0 as fraud_flag
-                FROM bronze.fraud_alerts GROUP BY customer_id
-            ) f ON c.customer_id = f.customer_id
-            WHERE c.customer_id IN ({placeholders})
-            GROUP BY c.customer_id, c.marketing_consent, c.last_seen, f.fraud_flag;
-            """,
-            affected,
-        )
-        self.conn.execute(
-            """
-            INSERT OR IGNORE INTO gold.order_facts
-            SELECT order_id, customer_id, amount_eur, country, occurred_at FROM silver.orders
-            WHERE occurred_at > ?
-            """,
-            (watermark,),
-        )
-        self.conn.execute(
             f"DELETE FROM gold.fraud_summary WHERE customer_id IN ({placeholders})", affected
         )
-        self.conn.execute(
+        live = [c for c in affected if c not in suppressed]
+        if live:
+            live_placeholders = ",".join("?" for _ in live)
+            self.conn.execute(
+                f"""
+                INSERT INTO gold.customer_360
+                SELECT
+                    c.customer_id,
+                    COUNT(DISTINCT o.order_id) as total_orders,
+                    COALESCE(SUM(o.amount_eur), 0) as total_spend_eur,
+                    COALESCE(AVG(o.amount_eur), 0) as avg_order_value_eur,
+                    c.marketing_consent,
+                    COALESCE(f.fraud_flag, FALSE) as fraud_flag,
+                    c.last_seen,
+                    c.marketing_consent as consents_marketing
+                FROM silver.customers c
+                LEFT JOIN silver.orders o ON c.customer_id = o.customer_id
+                LEFT JOIN (
+                    SELECT customer_id, COUNT(*) > 0 as fraud_flag
+                    FROM bronze.fraud_alerts GROUP BY customer_id
+                ) f ON c.customer_id = f.customer_id
+                WHERE c.customer_id IN ({live_placeholders})
+                  AND {_not_suppressed("c")}
+                GROUP BY c.customer_id, c.marketing_consent, c.last_seen, f.fraud_flag;
+                """,
+                live,
+            )
+            self.conn.execute(
+                f"""
+                INSERT INTO gold.fraud_summary
+                SELECT fa.customer_id, fa.rule, COUNT(*) as alert_count, MAX(fa.alert_ts) as last_alert
+                FROM bronze.fraud_alerts fa
+                WHERE fa.customer_id IN ({live_placeholders}) AND {_not_suppressed("fa")}
+                GROUP BY fa.customer_id, fa.rule;
+                """,
+                live,
+            )
+        order_facts = self.conn.execute(
             f"""
-            INSERT INTO gold.fraud_summary
-            SELECT customer_id, rule, COUNT(*) as alert_count, MAX(alert_ts) as last_alert
-            FROM bronze.fraud_alerts WHERE customer_id IN ({placeholders})
-            GROUP BY customer_id, rule;
+            INSERT OR IGNORE INTO gold.order_facts
+            SELECT so.order_id, so.customer_id, so.amount_eur, so.country, so.occurred_at
+            FROM silver.orders so
+            WHERE so.occurred_at > ? AND {_not_suppressed("so")}
+            RETURNING 1;
             """,
+            (watermark,),
+        ).fetchall()
+        built = self.conn.execute(
+            f"SELECT count(*) FROM gold.customer_360 WHERE customer_id IN ({placeholders})",
             affected,
-        )
+        ).fetchone()
         max_ts = self.conn.execute("SELECT max(last_seen) FROM silver.customers").fetchone()
         max_val = max_ts[0] if max_ts else None
         if max_val:
@@ -769,7 +858,11 @@ class Warehouse:
             self.sync_table_to_turso("gold.fraud_summary")
             self.sync_table_to_turso("governance.watermarks")
 
-        return {"customers": len(affected)}
+        return {
+            "customers": int(built[0]) if built and built[0] is not None else 0,
+            "order_facts": len(order_facts),
+            "suppressed_skipped": len(suppressed & set(affected)),
+        }
 
     # ---- Lake export (de-identified layers only) ----
 
@@ -782,6 +875,27 @@ class Warehouse:
         "gold.fraud_summary",
     )
 
+    #: Tables mirrored to Turso. One list, so the API, the CLI and the sync
+    #: verification can never drift apart on what "synced" means.
+    TURSO_TABLES = (
+        "bronze.orders",
+        "bronze.clicks",
+        "bronze.payments",
+        "bronze.fraud_alerts",
+        "silver.customers",
+        "silver.orders",
+        "silver.payments",
+        "gold.customer_360",
+        "gold.order_facts",
+        "gold.fraud_summary",
+        "governance.erasure_audit_log",
+        "governance.pii_manifest",
+        "governance.data_quality_runs",
+        "governance.suppression_registry",
+        "governance.watermarks",
+    )
+
+    @synchronized
     def export_lake(self, lake_root: Path) -> list[Path]:
         """Snapshot the de-identified Silver/Gold layers to Parquet under lake_root."""
         paths: list[Path] = []
@@ -796,6 +910,7 @@ class Warehouse:
             paths.append(out)
         return paths
 
+    @synchronized
     def ingest_fraud_alerts(self, alerts: list[Row]) -> None:
         if not alerts:
             return
@@ -824,30 +939,73 @@ class Warehouse:
             except Exception as e:
                 logger.debug("Turso ingest_fraud_alerts error: %s", e)
 
-    def query(self, sql: str) -> list[Row]:
-        rows = _rows_to_dicts(self.conn.execute(sql))
-        if not rows and self.turso:
+    @contextmanager
+    def cursor(self) -> Iterator[Any]:
+        """Hold the warehouse lock for a multi-statement block.
+
+        ``execute``/``query`` lock per call, but the erasure cascade and any
+        other read-modify-write sequence need one lock across several
+        statements. The generator form acquires explicitly because decorating
+        it with ``@synchronized`` would release the lock as soon as the
+        generator object was created.
+        """
+        self._lock.acquire()
+        try:
+            yield self.conn
+        finally:
+            self._lock.release()
+
+    @synchronized
+    def query(
+        self,
+        sql: str,
+        params: Sequence[Any] | None = None,
+        *,
+        local_only: bool = False,
+    ) -> list[Row]:
+        """Run a read query, optionally falling back to the Turso replica.
+
+        Bind values through ``params`` instead of interpolating them into
+        ``sql`` — DuckDB's ``execute`` accepts multiple statements, so a
+        concatenated string is an injection sink even inside a WHERE clause.
+
+        ``local_only=True`` pins the answer to this warehouse. Use it for
+        correctness verdicts (erasure verification, quality gates) that must
+        never be satisfied by a stale or differently-shaped cloud replica.
+        """
+        rows = _rows_to_dicts(self.conn.execute(sql, params) if params else self.conn.execute(sql))
+        if not rows and not local_only and self.turso:
             try:
-                rows = self.turso.query(sql)
+                rows = list(self.turso.query(sql, params))
             except Exception as e:
                 logger.debug("Turso query error: %s", e)
         return rows
 
-    def scalar(self, sql: str) -> int:
-        row = self.conn.execute(sql).fetchone()
-        if row is not None and row[0] is not None and int(row[0]) > 0:
-            return int(row[0])
-        if self.turso:
-            try:
-                val = self.turso.scalar(sql)
-                if val is not None and int(val) > 0:
-                    return int(val)
-            except Exception as e:
-                logger.debug("Turso scalar error: %s", e)
-        return int(row[0]) if row and row[0] is not None else 0
+    @synchronized
+    def scalar(
+        self,
+        sql: str,
+        params: Sequence[Any] | None = None,
+        *,
+        local_only: bool = False,
+    ) -> int:
+        """Single-value read. Same binding and ``local_only`` rules as :meth:`query`."""
+        result = self.conn.execute(sql, params) if params else self.conn.execute(sql)
+        row = result.fetchone()
+        value = int(row[0]) if row and row[0] is not None else 0
+        if value > 0 or local_only or not self.turso:
+            return value
+        try:
+            val = self.turso.scalar(sql, params)
+            if val is not None and int(val) > 0:
+                return int(val)
+        except Exception as e:
+            logger.debug("Turso scalar error: %s", e)
+        return value
 
     # ---- Governance helpers ----
 
+    @synchronized
     def add_suppressed(self, customer_id: str, added_at: float | None = None) -> None:
         if added_at is None:
             added_at = time.time()
@@ -864,6 +1022,7 @@ class Warehouse:
             except Exception as e:
                 logger.debug("Turso add_suppressed error: %s", e)
 
+    @synchronized
     def suppressed_ids(self) -> list[str]:
         rows = self.conn.execute(
             "SELECT customer_id FROM governance.suppression_registry ORDER BY customer_id"
@@ -878,6 +1037,7 @@ class Warehouse:
                 logger.debug("Turso suppressed_ids error: %s", e)
         return [str(r[0]) for r in rows]
 
+    @synchronized
     def save_manifest(self, manifest: Manifest) -> None:
         self.conn.execute("DELETE FROM governance.pii_manifest;")
         rows = [
@@ -896,6 +1056,7 @@ class Warehouse:
                 except Exception as e:
                     logger.debug("Turso save_manifest error: %s", e)
 
+    @synchronized
     def record_dq(self, run_id: str, check_name: str, passed: bool, detail: str) -> None:
         now = time.time()
         self.conn.execute(
@@ -911,6 +1072,7 @@ class Warehouse:
             except Exception as e:
                 logger.debug("Turso record_dq error: %s", e)
 
+    @synchronized
     def count_rows(self, table: str) -> int:
         statements = {
             "bronze.orders": "SELECT count(*) FROM bronze.orders",
