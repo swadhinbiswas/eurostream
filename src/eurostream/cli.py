@@ -43,9 +43,17 @@ def _fresh() -> tuple[Settings, Any, Warehouse, Metrics, PIIClassifier]:
     # Factory: sqlite (local, zero deps) vs kafka (Aiven, SASL_SSL).
     # .env controls it: EUROSTREAM_EVENT_BUS_BACKEND=kafka + KAFKA_* vars.
     if settings.event_bus_backend == "kafka":
-        from eurostream.bus.kafka import KafkaBus
+        try:
+            from eurostream.bus.kafka import KafkaBus
 
-        bus: Any = KafkaBus(settings)
+            bus: Any = KafkaBus(settings)
+        except (ImportError, ModuleNotFoundError, ValueError) as e:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Kafka requested but unavailable (%s) — using SQLite", e
+            )
+            bus = open_bus(settings.data_dir / "events.db")
     else:
         bus = open_bus(settings.data_dir / "events.db")
     warehouse = Warehouse(settings.warehouse_path)
