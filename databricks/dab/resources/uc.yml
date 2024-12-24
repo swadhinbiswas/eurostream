@@ -1,0 +1,71 @@
+# Namespace resources only. The medallion target tables are intentionally not
+# declared here: the Lakeflow source definitions in ../dlt own their creation.
+# These are deployment prerequisites; table grants, masks, filters, and Volume
+# policy are applied from the reviewed sql/50_grants_and_tags.sql after first
+# publication and sink bootstrap.
+resources:
+  schemas:
+    bronze:
+      name: ${var.bronze_schema}
+      catalog_name: ${var.catalog}
+      comment: Pipeline-owned raw event namespace; REPLACE USING targets are created in-pipeline.
+      grants:
+        - principal: ${var.pipeline_run_as_group}
+          privileges:
+            - USE_SCHEMA
+            - CREATE_TABLE
+        - principal: ${var.fraud_run_as_group}
+          privileges:
+            - USE_SCHEMA
+            - CREATE_TABLE
+        - principal: ${var.job_run_as_group}
+          privileges:
+            - USE_SCHEMA
+            - CREATE_TABLE
+
+    silver:
+      name: ${var.silver_schema}
+      catalog_name: ${var.catalog}
+      comment: Pipeline-owned cleansed and pseudonymized namespace.
+      grants:
+        - principal: ${var.pipeline_run_as_group}
+          privileges:
+            - USE_SCHEMA
+            - CREATE_MATERIALIZED_VIEW
+
+    gold:
+      name: ${var.gold_schema}
+      catalog_name: ${var.catalog}
+      comment: Pipeline-owned consent-gated aggregate namespace.
+      grants:
+        - principal: ${var.pipeline_run_as_group}
+          privileges:
+            - USE_SCHEMA
+            - CREATE_MATERIALIZED_VIEW
+
+    governance:
+      name: ${var.governance_schema}
+      catalog_name: ${var.catalog}
+      comment: Governance command, audit, quality, and PII evidence namespace.
+      grants:
+        - principal: ${var.pipeline_run_as_group}
+          privileges:
+            - USE_SCHEMA
+        - principal: ${var.job_run_as_group}
+          privileges:
+            - USE_SCHEMA
+        - principal: ${var.fraud_run_as_group}
+          privileges:
+            - USE_SCHEMA
+        - principal: ${var.erasure_run_as_group}
+          privileges:
+            - USE_SCHEMA
+
+    lake:
+      name: ${var.lake_schema}
+      catalog_name: ${var.catalog}
+      comment: Restricted pseudonymized export namespace; Volume policy remains in the reviewed UC policy.
+      grants:
+        - principal: ${var.job_run_as_group}
+          privileges:
+            - USE_SCHEMA

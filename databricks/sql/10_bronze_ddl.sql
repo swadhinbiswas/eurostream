@@ -1,0 +1,75 @@
+-- REFERENCE ONLY — THIS FILE MUST NOT BE RUN AS A SQL BOOTSTRAP.
+-- Official contract: https://docs.databricks.com/aws/en/ldp/flows-replace-using
+--
+-- Lakeflow owns every Bronze target listed in this file. The target table must be created by Lakeflow
+-- in the pipeline definition; pre-creating it in a separate SQL session is
+-- invalid for a REPLACE USING flow. Run 00_catalogs.sql and the
+-- governance bootstrap first, publish the Bronze pipeline, and then apply
+-- policies/grants from 50_grants_and_tags.sql.
+--
+-- REPLACE USING is a Beta Lakeflow feature and requires DBR 18.2 or newer
+-- (Databricks Runtime 18.2+). The source must be streaming. The target must be created
+-- inside the pipeline, the source must be streaming, and every replacement
+-- flow requires a non-null sequence. The Python source supplies the sequence
+-- expression used by the decorators.
+--
+-- Important limitation from the official contract: rows sharing the same key
+-- and the same sequence are appended rather than replaced. This showcase does
+-- not claim exactly-once replay deduplication. The deterministic sequence
+-- below orders source-coordinate ties deterministically; an exact replay with
+-- the same source coordinates remains indistinguishable to REPLACE USING.
+--
+-- Deterministic event sequence fingerprint (SHA-256, sortable string):
+--   source | partition | offset | file modification time | file path |
+--   event_id | event_type | occurred_at
+-- All components are coalesced to a non-null value before hashing. For Kafka,
+-- partition/offset provide the source-coordinate tie-breaker. For Auto Loader,
+-- file path/modification time provide it.
+--
+-- Pipeline-owned event targets and column contracts:
+--
+--   orders / orders_files
+--     event_id, schema_version, event_type, occurred_at, order_id,
+--     customer_id, email, iban, country, amount_eur, marketing_consent,
+--     currency, _occurred_at, _ingested_at, _source, _kafka_ts,
+--     _kafka_partition, _kafka_offset, _file_path, _file_modification_time
+--     source: kafka:orders or autoloader:orders_files
+--     key: event_id; sequence: BRONZE_REPLACE_SEQUENCE
+--     suppression: watermarked outer anti-join with a 100-year time range
+--
+--   clicks
+--     event_id, schema_version, event_type, occurred_at, click_id,
+--     customer_id, session_id, ip_address, page, country, _occurred_at,
+--     _ingested_at, _source, _kafka_ts, _kafka_partition, _kafka_offset,
+--     _file_path, _file_modification_time
+--     key: event_id; sequence: BRONZE_REPLACE_SEQUENCE
+--
+--   payments
+--     event_id, schema_version, event_type, occurred_at, payment_id, order_id,
+--     customer_id, iban, amount_eur, country, merchant_country, status,
+--     _occurred_at, _ingested_at, _source, _kafka_ts, _kafka_partition,
+--     _kafka_offset, _file_path, _file_modification_time
+--     key: event_id; sequence: BRONZE_REPLACE_SEQUENCE
+--
+--   erasure_requests
+--     event_id, schema_version, event_type, occurred_at, request_id,
+--     customer_id, reason, requested_by, _occurred_at, _ingested_at,
+--     _source, _kafka_ts, _kafka_partition, _kafka_offset, _file_path,
+--     _file_modification_time
+--     key: event_id; sequence: BRONZE_REPLACE_SEQUENCE
+--
+--   ingest_quarantine
+--     quarantine_id, source_name, source_partition, source_offset, file_path,
+--     event_id, customer_id, raw_payload, quarantine_reason,
+--     suppression_status, occurred_at, ingested_at
+--     key: quarantine_id; sequence: QUARANTINE_REPLACE_SEQUENCE
+--     raw_payload is restricted PII; suppression is applied before this target.
+--
+-- orders_files is canonical and is consumed by Silver alongside orders. The
+-- fraud_alerts target is not a Lakeflow-owned target: the standalone fraud
+-- notebook calls its own idempotent schema bootstrap before starting the sink.
+-- Its contract is alert_id, customer_id, rule, score, detail, alerted_at,
+-- window_start, window_end, _created_at; it is partitioned by rule.
+--
+-- Post-publish validation should inspect the pipeline-owned schemas and
+-- metadata in the workspace; do not add target-creation statements here.

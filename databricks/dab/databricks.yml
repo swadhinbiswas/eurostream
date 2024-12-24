@@ -1,0 +1,170 @@
+# Optional Declarative Automation Bundle for the EuroStream showcase.
+#
+# The manual Databricks UI path remains the source of truth.  This bundle is
+# intentionally a post-rehearsal convenience and must not be used to bootstrap
+# the medallion tables from SQL.
+#
+# Official bundle schema:
+# https://github.com/databricks/cli/blob/main/bundle/schema/jsonschema.json
+
+bundle:
+  name: eurostream
+  # Required for the UC schema resources in resources/uc.yml.
+  engine: direct
+
+include:
+  - resources/*.yml
+
+# The source-controlled files live beside the bundle root.  Keep the sync
+# allow-list narrow: in particular, do not sync or execute sql/10_bronze_ddl.sql,
+# sql/20_silver_ddl.sql, or sql/30_gold_ddl.sql.  REPLACE USING targets are
+# created by the pipeline definitions on first update. The DAB-local erasure
+# stage notebooks are synced explicitly so the parent Job uses the staged,
+# ownership-safe graph.
+sync:
+  paths:
+    - ..
+  include:
+    - dab/databricks.yml
+    - dab/resources/*.yml
+    - dab/notebooks/*.py
+    - dab/sql/*.sql
+    - dlt/*.py
+    - notebooks/*.py
+    - app/**
+  exclude:
+    - app/node_modules/**
+    - app/dist/**
+    - app/client/dist/**
+    - app/.tmp/**
+    - app/coverage/**
+    - dlt/**/__pycache__/**
+    - dlt/**/*.pyc
+    - notebooks/02_article17_erasure.py
+    - dab/.databricks/**
+    - dab/databricks-target-*/
+
+variables:
+  dev_workspace_host:
+    description: >-
+      Dev workspace URL. Supply it with --var or BUNDLE_VAR_dev_workspace_host;
+      authentication itself remains in the Databricks CLI profile/OIDC env.
+  prod_workspace_host:
+    description: >-
+      Production workspace URL. Supply it with --var or
+      BUNDLE_VAR_prod_workspace_host.
+  prod_deployer_application_id:
+    description: >-
+      Application ID (not a display name) of the production deployment service
+      principal. Supply at deploy time; do not put an identity in git.
+
+  catalog:
+    description: Unity Catalog catalog used by the showcase.
+    default: eurostream
+  bronze_schema:
+    description: Pipeline-owned Bronze schema.
+    default: bronze
+  silver_schema:
+    description: Pipeline-owned Silver schema.
+    default: silver
+  gold_schema:
+    description: Pipeline-owned Gold schema.
+    default: gold
+  governance_schema:
+    description: Governance schema used by the notebooks and pipelines.
+    default: governance
+  lake_schema:
+    description: Schema containing the governed export Volume.
+    default: lake
+
+  dev_kafka_bootstrap:
+    description: >-
+      Dev Kafka bootstrap servers in host:port form.  No localhost fallback is
+      used by this optional bundle.
+  prod_kafka_bootstrap:
+    description: Production Kafka bootstrap servers in host:port form.
+  runtime_secret_scope:
+    description: Workspace secret scope read by pipeline and fraud runtimes.
+    default: eurostream
+  pii_salt_secret_key:
+    description: Key in runtime_secret_scope containing the PII salt.
+    default: pii_salt
+  preview_secret_scope:
+    description: Isolated workspace secret scope containing only the App preview key.
+    default: eurostream-app-preview
+  preview_secret_key:
+    description: App preview HMAC key name; the value is never stored here.
+    default: EUROSTREAM_PREVIEW_SECRET
+  pipeline_run_as_group:
+    description: >-
+      Account group used as the least-privilege Run as identity for Lakeflow
+      pipelines. Provision its UC and Volume grants separately.
+    default: eurostream_pipeline_service
+  job_run_as_group:
+    description: >-
+      Account group used for bounded quality, medallion, export, and orchestrator
+      Job tasks. Provision its task-specific UC grants separately.
+    default: eurostream_job_runner
+  fraud_run_as_group:
+    description: >-
+      Dedicated account group for the continuous fraud Job and fraud sink.
+    default: eurostream_fraud_runner
+  erasure_run_as_group:
+    description: >-
+      Dedicated account group for the high-impact Article 17 Job graph.
+    default: eurostream_erasure_runner
+  on_call_email:
+    description: >-
+      Approved failure-notification recipient for showcase operations. Supply at
+      deploy time; no email address is committed to source.
+  erasure_internal_slo_seconds:
+    description: >-
+      Internal engineering SLO used by the erasure notebook/benchmark; this is
+      not represented as a statutory deadline.
+    default: "60"
+
+  fraud_spark_version:
+    description: >-
+      Classic Jobs compute runtime for the time-based Structured Streaming fraud
+      notebook. The checked-in baseline is DBR 18.2.x/Scala 2.13; override it
+      only after validating the target workspace and state/checkpoint branch.
+    default: 18.2.x-scala2.13
+  fraud_node_type_id:
+    description: >-
+      Cloud-specific node type for the fraud Job.  Supply a node available in
+      the target workspace; it is intentionally not hard-coded to i4i/i3.
+  sql_warehouse_id:
+    description: Existing serverless/pro SQL warehouse used by the App.
+    lookup:
+      warehouse: eurostream-warehouse
+  kafka_bootstrap:
+    description: >-
+      Target-specific Kafka bootstrap servers. Override with the dev/prod
+      variables below or pass a value directly at deploy time.
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: ${var.dev_workspace_host}
+      root_path: /Workspace/Users/${workspace.current_user.short_name}/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      user_name: ${workspace.current_user.userName}
+    variables:
+      kafka_bootstrap: ${var.dev_kafka_bootstrap}
+
+  prod:
+    mode: production
+    workspace:
+      host: ${var.prod_workspace_host}
+      # Keep production outside /Shared so folder write access can be
+      # restricted to the deployment identity.
+      root_path: /Workspace/Production/${bundle.name}/${bundle.target}
+    run_as:
+      service_principal_name: ${var.prod_deployer_application_id}
+    permissions:
+      - level: CAN_MANAGE
+        service_principal_name: ${var.prod_deployer_application_id}
+    variables:
+      kafka_bootstrap: ${var.prod_kafka_bootstrap}

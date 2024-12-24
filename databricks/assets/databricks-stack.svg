@@ -1,0 +1,419 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1640" height="3260" viewBox="0 0 1640 3260" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif">
+<defs>
+<marker id="a" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L9,4 L0,8 z" fill="#8B949E"/></marker>
+<marker id="ar" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L9,4 L0,8 z" fill="#FF3621"/></marker>
+<marker id="ap" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L9,4 L0,8 z" fill="#9B6BF2"/></marker>
+<marker id="aa" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L9,4 L0,8 z" fill="#E6B84A"/></marker>
+<marker id="ag" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L9,4 L0,8 z" fill="#2EA043"/></marker>
+<marker id="ab" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L9,4 L0,8 z" fill="#2E7CF6"/></marker>
+</defs>
+<rect x="0" y="0" width="1640" height="3260" rx="0" fill="#0B1020"/>
+<text x="60" y="62" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="28" fill="#EAF0FA" font-weight="800" text-anchor="start" >EuroStream on Databricks — Standalone Showcase Architecture</text>
+<text x="60" y="92" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#8B949E" font-weight="400" text-anchor="start" >Native AppKit + Lakeflow + Unity Catalog Delta · standalone from the local Python/FastAPI/DuckDB workflow · EU workspace target</text>
+<rect x="1230" y="44" width="350" height="36" rx="18" fill="#1F1410" stroke="#FF3621" stroke-width="1.5"/>
+<text x="1405" y="67" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#FF6B4A" font-weight="700" text-anchor="middle" >manual workspace setup · optional DABs</text>
+<rect x="40" y="130" width="1560" height="2370" rx="20" fill="#1D4ED8" stroke="#1D4ED8" stroke-width="2" stroke-dasharray="10 6" fill-opacity="0.04"/>
+<rect x="70" y="115" width="700" height="30" rx="15" fill="#0B1020" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="88" y="135" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#60A5FA" font-weight="700" text-anchor="start" >EU WORKSPACE TARGET · residency, CMK, and private connectivity validated at deployment</text>
+<rect x="1155" y="115" width="445" height="30" rx="15" fill="#0B1020" stroke="#1D4ED8" stroke-width="1.5"/>
+<text x="1173" y="135" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#60A5FA" font-weight="700" text-anchor="start" >Unity Catalog metastore + table residency target</text>
+<rect x="100" y="175" width="460" height="170" rx="14" fill="#151B2E" stroke="#2A3350" stroke-width="1.8"/>
+<rect x="102" y="189" width="4" height="142" rx="2" fill="#FF3621"/>
+<text x="120" y="206" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" fill="#EAF0FA" font-weight="700" text-anchor="start" >Aiven Kafka — event bus</text>
+<text x="120" y="227" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="400" text-anchor="start" >SASL_SSL · SCRAM-SHA-256 · standalone topic contract</text>
+<rect x="120" y="242" width="55" height="22" rx="11" fill="#0D1018" stroke="#4C5878" stroke-width="1.2"/>
+<text x="147.5" y="257" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >orders</text>
+<rect x="185" y="242" width="55" height="22" rx="11" fill="#0D1018" stroke="#4C5878" stroke-width="1.2"/>
+<text x="212.5" y="257" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >clicks</text>
+<rect x="250" y="242" width="68" height="22" rx="11" fill="#0D1018" stroke="#4C5878" stroke-width="1.2"/>
+<text x="284.0" y="257" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >payments</text>
+<rect x="120" y="272" width="121" height="22" rx="11" fill="#0D1018" stroke="#4C5878" stroke-width="1.2"/>
+<text x="180.5" y="287" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >erasure_requests</text>
+<text x="120" y="322" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#8B949E" font-weight="400" text-anchor="start" >REPLACE USING event_id · same-sequence replay caveat</text>
+<rect x="600" y="175" width="340" height="170" rx="14" fill="#151B2E" stroke="#2A3350" stroke-width="1.8"/>
+<rect x="602" y="189" width="4" height="142" rx="2" fill="#4C5878"/>
+<text x="620" y="206" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" fill="#EAF0FA" font-weight="700" text-anchor="start" >Partner file drop</text>
+<text x="620" y="227" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="400" text-anchor="start" >Auto Loader (cloudFiles) · JSON · partner SFTP</text>
+<rect x="620" y="245" width="273" height="22" rx="11" fill="#0D1018" stroke="#35B8C9" stroke-width="1.2"/>
+<text x="756.5" y="260" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >/Volumes/eurostream/bronze/inbox/orders</text>
+<text x="620" y="300" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#8B949E" font-weight="400" text-anchor="start" >checkpoint in UC Volume — survives restarts</text>
+<rect x="980" y="175" width="420" height="170" rx="14" fill="#151B2E" stroke="#2A3350" stroke-width="1.8"/>
+<rect x="982" y="189" width="4" height="142" rx="2" fill="#2EA043"/>
+<text x="1000" y="206" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" fill="#EAF0FA" font-weight="700" text-anchor="start" >Native AppKit App — request</text>
+<text x="1000" y="227" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="400" text-anchor="start" >React + TypeScript · signed-in DPO operator</text>
+<rect x="1000" y="245" width="75" height="22" rx="11" fill="#0D1018" stroke="#2EA043" stroke-width="1.2"/>
+<text x="1037.5" y="260" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >ticket_id</text>
+<rect x="1085" y="245" width="88" height="22" rx="11" fill="#0D1018" stroke="#2EA043" stroke-width="1.2"/>
+<text x="1129.0" y="260" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >customer_id</text>
+<text x="1000" y="300" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#8B949E" font-weight="400" text-anchor="start" >HMAC preview → exact confirm → one Job run</text>
+<rect x="100" y="365" width="420" height="180" rx="14" fill="#1F1410" stroke="#FF3621" stroke-width="1.8"/>
+<rect x="102" y="379" width="4" height="152" rx="2" fill="#FF3621"/>
+<text x="120" y="396" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" fill="#EAF0FA" font-weight="700" text-anchor="start" >Continuous fraud Job — bounded state</text>
+<text x="120" y="417" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="400" text-anchor="start" >Kafka payments → bronze.fraud_alerts</text>
+<text x="120" y="445" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#FF6B4A" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="445" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >velocity window + one alert per window</text>
+<text x="120" y="467" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#FF6B4A" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="467" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >z-score with bounded recent-value deque</text>
+<text x="120" y="489" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#FF6B4A" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="489" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >geo mismatch: billing country ≠ merchant country</text>
+<text x="120" y="511" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#FF6B4A" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="511" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >suppression anti-join before alert emission</text>
+<rect x="560" y="365" width="880" height="180" rx="14" fill="#1F1410" stroke="#FF3621" stroke-width="1.8"/>
+<rect x="562" y="379" width="4" height="152" rx="2" fill="#FF3621"/>
+<text x="580" y="396" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" fill="#EAF0FA" font-weight="700" text-anchor="start" >Lakeflow Declarative Pipelines — bronze_ingest.py</text>
+<text x="580" y="417" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="400" text-anchor="start" >serverless · Photon · preview channel · REPLACE USING Beta</text>
+<text x="580" y="447" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#FF6B4A" font-weight="700" text-anchor="start" >•</text>
+<text x="594" y="447" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >Kafka source + Auto Loader with explicit contracts</text>
+<text x="580" y="469" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#FF6B4A" font-weight="700" text-anchor="start" >•</text>
+<text x="594" y="469" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >expectations → exclusive governed quarantine</text>
+<text x="580" y="491" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#FF6B4A" font-weight="700" text-anchor="start" >•</text>
+<text x="594" y="491" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >REPLACE USING event_id · DBR 18.2+ Beta</text>
+<text x="580" y="513" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#FF6B4A" font-weight="700" text-anchor="start" >•</text>
+<text x="594" y="513" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >same key+sequence appends; no exactly-once claim</text>
+<rect x="100" y="565" width="1340" height="1110" rx="16" fill="#0D1220" stroke="#2A3350" stroke-width="2"/>
+<rect x="100" y="565" width="420" height="46" rx="14" fill="#1E2740" stroke="#2A3350" stroke-width="2"/>
+<rect x="100" y="595" width="420" height="16" rx="12" fill="#1E2740"/>
+<text x="120" y="594" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#EAF0FA" font-weight="800" text-anchor="start" >UNITY CATALOG · eurostream.*</text>
+<text x="1420" y="594" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#8B949E" font-weight="400" text-anchor="end" >three-level namespace · Delta Lake · EU metastore target · UC policies · auto lineage</text>
+<rect x="140" y="645" width="890" height="260" rx="14" fill="#1A1206" stroke="#CD8032" stroke-width="2"/>
+<text x="160" y="677" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="16" fill="#CD8032" font-weight="800" text-anchor="start" >bronze</text>
+<text x="1010" y="675" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#CD8032" font-weight="400" text-anchor="end" opacity="0.85">clear-text PII · restricted · SELECT only for pii_engineer</text>
+<rect x="160" y="695" width="55" height="22" rx="11" fill="#0D1018" stroke="#CD8032" stroke-width="1.2"/>
+<text x="187.5" y="710" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >orders</text>
+<rect x="225" y="695" width="55" height="22" rx="11" fill="#0D1018" stroke="#CD8032" stroke-width="1.2"/>
+<text x="252.5" y="710" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >clicks</text>
+<rect x="290" y="695" width="68" height="22" rx="11" fill="#0D1018" stroke="#CD8032" stroke-width="1.2"/>
+<text x="324.0" y="710" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >payments</text>
+<rect x="368" y="695" width="121" height="22" rx="11" fill="#0D1018" stroke="#CD8032" stroke-width="1.2"/>
+<text x="428.5" y="710" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >erasure_requests</text>
+<rect x="499" y="695" width="95" height="22" rx="11" fill="#0D1018" stroke="#CD8032" stroke-width="1.2"/>
+<text x="546.5" y="710" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >fraud_alerts</text>
+<text x="160" y="756" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#CD8032" font-weight="700" text-anchor="start" >•</text>
+<text x="174" y="756" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >PII columns tagged pii_email / pii_iban / pii_ip — machine-readable (Art. 30)</text>
+<text x="160" y="780" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#CD8032" font-weight="700" text-anchor="start" >•</text>
+<text x="174" y="780" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >Art.17 L2 masks current PII values; Delta does not guarantee row order</text>
+<text x="160" y="804" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#CD8032" font-weight="700" text-anchor="start" >•</text>
+<text x="174" y="804" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >delta.enableChangeDataFeed = true · partitioned by country</text>
+<text x="160" y="828" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#CD8032" font-weight="700" text-anchor="start" >•</text>
+<text x="174" y="828" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >expectation failures → quarantine view (never silently dropped)</text>
+<rect x="140" y="935" width="890" height="74" rx="12" fill="#1F1410" stroke="#FF3621" stroke-width="1.8"/>
+<text x="160" y="965" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" fill="#FF6B4A" font-weight="800" text-anchor="start" >Lakeflow · silver_pseudonymize.py</text>
+<text x="160" y="990" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >full-refresh Lakeflow MV over the current Bronze Delta snapshot · sha2(salt ‖ &#x27;:&#x27; ‖ x) · row_number() dedup · ISO 7064 IBAN quarantine · suppression anti-join (L1)</text>
+<rect x="140" y="1039" width="890" height="240" rx="14" fill="#131926" stroke="#9AA7B8" stroke-width="2"/>
+<text x="160" y="1071" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="16" fill="#9AA7B8" font-weight="800" text-anchor="start" >silver</text>
+<text x="1010" y="1069" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#9AA7B8" font-weight="400" text-anchor="end" opacity="0.85">pseudonymized · 64-hex hashes only · full-refresh MV</text>
+<rect x="160" y="1089" width="75" height="22" rx="11" fill="#0D1018" stroke="#9AA7B8" stroke-width="1.2"/>
+<text x="197.5" y="1104" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >customers</text>
+<rect x="245" y="1089" width="55" height="22" rx="11" fill="#0D1018" stroke="#9AA7B8" stroke-width="1.2"/>
+<text x="272.5" y="1104" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >orders</text>
+<rect x="310" y="1089" width="68" height="22" rx="11" fill="#0D1018" stroke="#9AA7B8" stroke-width="1.2"/>
+<text x="344.0" y="1104" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >payments</text>
+<rect x="388" y="1089" width="128" height="22" rx="11" fill="#0D1018" stroke="#9AA7B8" stroke-width="1.2"/>
+<text x="452.0" y="1104" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >orders_quarantine</text>
+<text x="160" y="1156" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9AA7B8" font-weight="700" text-anchor="start" >•</text>
+<text x="174" y="1156" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >H(s,x) = SHA256(s ‖ &#x27;:&#x27; ‖ x) → stable token; personal data remains pseudonymized</text>
+<text x="160" y="1180" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9AA7B8" font-weight="700" text-anchor="start" >•</text>
+<text x="174" y="1180" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >DQ gate: hash columns must match ^[0-9a-f]{64}$ — no &#x27;@&#x27; in Silver</text>
+<text x="160" y="1204" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9AA7B8" font-weight="700" text-anchor="start" >•</text>
+<text x="174" y="1204" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >natural-key dedup on event_id within the full snapshot</text>
+<text x="160" y="1228" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#9AA7B8" font-weight="700" text-anchor="start" >•</text>
+<text x="174" y="1228" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >full-refresh Lakeflow MV over the current Bronze Delta snapshot</text>
+<rect x="140" y="1309" width="890" height="74" rx="12" fill="#1F1410" stroke="#FF3621" stroke-width="1.8"/>
+<text x="160" y="1339" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" fill="#FF6B4A" font-weight="800" text-anchor="start" >Lakeflow · gold_consent_gated.py</text>
+<text x="160" y="1364" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >bool_and(marketing_consent) · expect_or_drop FK → customer_360 · row_number() dedup on primary keys</text>
+<rect x="140" y="1413" width="890" height="240" rx="14" fill="#1A1608" stroke="#E6B84A" stroke-width="2"/>
+<text x="160" y="1445" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="16" fill="#E6B84A" font-weight="800" text-anchor="start" >gold</text>
+<text x="1010" y="1443" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#E6B84A" font-weight="400" text-anchor="end" opacity="0.85">curated · consent-gated · pseudonymized</text>
+<rect x="160" y="1463" width="95" height="22" rx="11" fill="#0D1018" stroke="#E6B84A" stroke-width="1.2"/>
+<text x="207.5" y="1478" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >customer_360</text>
+<rect x="265" y="1463" width="88" height="22" rx="11" fill="#0D1018" stroke="#E6B84A" stroke-width="1.2"/>
+<text x="309.0" y="1478" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >order_facts</text>
+<rect x="363" y="1463" width="101" height="22" rx="11" fill="#0D1018" stroke="#E6B84A" stroke-width="1.2"/>
+<text x="413.5" y="1478" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >fraud_summary</text>
+<text x="160" y="1520" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#E6B84A" font-weight="700" text-anchor="start" >•</text>
+<text x="174" y="1520" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >consents_marketing = bool_and(marketing_consent) — Art. 6/7 dynamic consent</text>
+<text x="160" y="1544" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#E6B84A" font-weight="700" text-anchor="start" >•</text>
+<text x="174" y="1544" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >unique PKs asserted by the quality gate (customer_id, order_id)</text>
+<text x="160" y="1568" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#E6B84A" font-weight="700" text-anchor="start" >•</text>
+<text x="174" y="1568" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >pseudonymized governed export · stable IDs remain personal data</text>
+<text x="160" y="1592" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#E6B84A" font-weight="700" text-anchor="start" >•</text>
+<text x="174" y="1592" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >Art.17 L4 refresh recomputes; Delta history is not claimed gone</text>
+<rect x="1060" y="645" width="340" height="400" rx="14" fill="#150E26" stroke="#9B6BF2" stroke-width="2"/>
+<text x="1080" y="677" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="14" fill="#9B6BF2" font-weight="800" text-anchor="start" >governance</text>
+<text x="1080" y="697" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="400" text-anchor="start" >compliance evidence · durable command state</text>
+<rect x="1080" y="715" width="148" height="22" rx="11" fill="#0D1018" stroke="#9B6BF2" stroke-width="1.2"/>
+<text x="1154.0" y="730" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >suppression_registry</text>
+<rect x="1080" y="745" width="154" height="22" rx="11" fill="#0D1018" stroke="#9B6BF2" stroke-width="1.2"/>
+<text x="1157.0" y="760" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >erasure_command_state</text>
+<rect x="1080" y="775" width="115" height="22" rx="11" fill="#0D1018" stroke="#9B6BF2" stroke-width="1.2"/>
+<text x="1137.5" y="790" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >quality_results</text>
+<rect x="1205" y="775" width="95" height="22" rx="11" fill="#0D1018" stroke="#9B6BF2" stroke-width="1.2"/>
+<text x="1252.5" y="790" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >pii_manifest</text>
+<text x="1080" y="830" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#9B6BF2" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="830" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >L1 suppression registry — future-write guard</text>
+<text x="1080" y="852" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#9B6BF2" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="852" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >durable queued → running → completed | failed</text>
+<text x="1080" y="874" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#9B6BF2" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="874" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >confirmation token identifies the request only</text>
+<text x="1080" y="896" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#9B6BF2" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="896" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >quality_results: six-gate run history</text>
+<text x="1080" y="918" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#9B6BF2" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="918" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >pii_manifest: machine-readable PII flags</text>
+<text x="1080" y="940" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#9B6BF2" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="940" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >internal SLO timing: requested → logical complete</text>
+<text x="1080" y="962" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#9B6BF2" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="962" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >logical/export/fraud-sink statuses stay distinct</text>
+<rect x="1060" y="1075" width="340" height="280" rx="14" fill="#08171C" stroke="#35B8C9" stroke-width="2"/>
+<text x="1080" y="1107" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="14" fill="#35B8C9" font-weight="800" text-anchor="start" >volumes</text>
+<text x="1080" y="1127" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="400" text-anchor="start" >governed files · outside Delta table history</text>
+<rect x="1080" y="1145" width="141" height="22" rx="11" fill="#0D1018" stroke="#35B8C9" stroke-width="1.2"/>
+<text x="1150.5" y="1160" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >bronze/_checkpoints</text>
+<rect x="1231" y="1145" width="95" height="22" rx="11" fill="#0D1018" stroke="#35B8C9" stroke-width="1.2"/>
+<text x="1278.5" y="1160" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >bronze/inbox</text>
+<rect x="1080" y="1175" width="95" height="22" rx="11" fill="#0D1018" stroke="#35B8C9" stroke-width="1.2"/>
+<text x="1127.5" y="1190" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="middle" >lake/exports</text>
+<text x="1080" y="1240" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#35B8C9" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="1240" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >streaming + Auto Loader checkpoints</text>
+<text x="1080" y="1262" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#35B8C9" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="1262" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >partner inbox is a separate raw store</text>
+<text x="1080" y="1284" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#35B8C9" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="1284" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >/Volumes/eurostream/lake/exports</text>
+<text x="1080" y="1306" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#35B8C9" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="1306" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >remote sync is optional and separately verified</text>
+<rect x="1060" y="1385" width="340" height="268" rx="14" fill="#1B0E1A" stroke="#EC4899" stroke-width="2"/>
+<text x="1080" y="1417" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="13.5" fill="#EC4899" font-weight="800" text-anchor="start" >UC access control</text>
+<text x="1080" y="1432" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="400" text-anchor="start" >platform-enforced, not app-enforced</text>
+<text x="1080" y="1468" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#EC4899" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="1468" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >masking policy → &lt;masked&gt; (non-PII roles)</text>
+<text x="1080" y="1490" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#EC4899" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="1490" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >row filter on bronze.orders</text>
+<text x="1080" y="1512" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#EC4899" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="1512" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >App users: Gold + count-only governance views</text>
+<text x="1100" y="1531" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >signed-in user permissions via OBO SQL</text>
+<text x="1100" y="1553" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >operator groups limited to App + Job actions</text>
+<text x="1100" y="1575" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >Art. 25 by-design + Art. 32 security</text>
+<rect x="100" y="1725" width="1340" height="360" rx="16" fill="#0D1220" stroke="#2A3350" stroke-width="2"/>
+<rect x="100" y="1725" width="460" height="46" rx="14" fill="#2A1A16" stroke="#2A3350" stroke-width="2"/>
+<rect x="100" y="1755" width="460" height="16" rx="12" fill="#2A1A16"/>
+<text x="120" y="1754" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#FF6B4A" font-weight="800" text-anchor="start" >DATABRICKS WORKFLOWS + LAKEFLOW JOBS</text>
+<text x="1420" y="1766" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#8B949E" font-weight="400" text-anchor="end" >continuous pipelines · scheduled medallion · on-demand erasure · retries and alerts · no local scheduler dependency</text>
+<rect x="140" y="1795" width="234" height="260" rx="12" fill="#151B2E" stroke="#2A3350" stroke-width="1.5"/>
+<circle cx="164" cy="1821" r="12" fill="#FF3621"/>
+<text x="164" y="1826" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#FFFFFF" font-weight="800" text-anchor="middle" >1</text>
+<text x="184" y="1826" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#EAF0FA" font-weight="700" text-anchor="start" >medallion_refresh</text>
+<text x="156" y="1852" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="700" text-anchor="start" >standalone showcase DAG</text>
+<text x="156" y="1880" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >trigger: orchestrator (job_task)</text>
+<text x="156" y="1904" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >tasks: bronze → silver → gold</text>
+<text x="156" y="1928" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >continuous Bronze + batch Silver/Gold</text>
+<text x="156" y="1952" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >Silver MV reads current Bronze snapshot</text>
+<text x="156" y="1976" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >failure blocks downstream tasks</text>
+<text x="156" y="2000" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >quality and export depend on success</text>
+<rect x="394" y="1795" width="234" height="260" rx="12" fill="#151B2E" stroke="#2A3350" stroke-width="1.5"/>
+<circle cx="418" cy="1821" r="12" fill="#FF3621"/>
+<text x="418" y="1826" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#FFFFFF" font-weight="800" text-anchor="middle" >2</text>
+<text x="438" y="1826" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#EAF0FA" font-weight="700" text-anchor="start" >orchestrator</text>
+<text x="410" y="1852" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="700" text-anchor="start" >4-hour schedule</text>
+<text x="410" y="1880" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >cron 0 0 */4 * * ? · Europe/Berlin</text>
+<text x="410" y="1904" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >medallion → quality → export</text>
+<text x="410" y="1928" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >pause until non-prod rehearsal passes</text>
+<text x="410" y="1952" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >failure notification → data-oncall</text>
+<text x="410" y="1976" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >health rule alerts on long runs</text>
+<text x="410" y="2000" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >max_concurrent_runs = 1</text>
+<rect x="648" y="1795" width="234" height="260" rx="12" fill="#151B2E" stroke="#2A3350" stroke-width="1.5"/>
+<circle cx="672" cy="1821" r="12" fill="#FF3621"/>
+<text x="672" y="1826" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#FFFFFF" font-weight="800" text-anchor="middle" >3</text>
+<text x="692" y="1826" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#EAF0FA" font-weight="700" text-anchor="start" >quality_gate</text>
+<text x="664" y="1852" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="700" text-anchor="start" >fail-closed data gate</text>
+<text x="664" y="1880" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >runs notebooks/01_quality_gates.py</text>
+<text x="664" y="1904" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >6 assertions → quality_results</text>
+<text x="664" y="1928" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >uniqueness · PII · consent · FK</text>
+<text x="664" y="1952" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >records run_id per check</text>
+<text x="664" y="1976" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >fail_on_error=true blocks export</text>
+<text x="664" y="2000" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >runs after medallion refresh</text>
+<rect x="902" y="1795" width="234" height="260" rx="12" fill="#1F1410" stroke="#FF3621" stroke-width="2.2"/>
+<circle cx="926" cy="1821" r="12" fill="#FF3621"/>
+<text x="926" y="1826" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#FFFFFF" font-weight="800" text-anchor="middle" >4</text>
+<text x="946" y="1826" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#EAF0FA" font-weight="700" text-anchor="start" >art17_erasure</text>
+<text x="918" y="1852" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#FF6B4A" font-weight="700" text-anchor="start" >six logical layers</text>
+<text x="918" y="1880" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >1  suppress + mask direct targets</text>
+<text x="918" y="1904" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >2  purge Bronze quarantine + fraud sink</text>
+<text x="918" y="1928" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >3  synchronously refresh Silver MV</text>
+<text x="918" y="1952" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >4  synchronously refresh Gold MV</text>
+<text x="918" y="1976" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >5  verify both MVs are customer-free</text>
+<text x="918" y="2000" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >6  export; fraud-sink cleanup stays scoped</text>
+<rect x="1156" y="1795" width="234" height="260" rx="12" fill="#151B2E" stroke="#2A3350" stroke-width="1.5"/>
+<circle cx="1180" cy="1821" r="12" fill="#FF3621"/>
+<text x="1180" y="1826" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#FFFFFF" font-weight="800" text-anchor="middle" >5</text>
+<text x="1200" y="1826" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#EAF0FA" font-weight="700" text-anchor="start" >erasure_benchmark</text>
+<text x="1172" y="1852" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="700" text-anchor="start" >internal SLO benchmark</text>
+<text x="1172" y="1880" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >50 synthetic direct-preparation trials</text>
+<text x="1172" y="1904" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >mean / p50 / p95; configurable 60 s SLO</text>
+<text x="1172" y="1928" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >MV refresh/export/fraud-sink cleanup excluded</text>
+<text x="1172" y="1952" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >fraud-sink cleanup not benchmarked</text>
+<text x="1172" y="1976" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >fail if p95 exceeds internal SLO</text>
+<text x="1172" y="2000" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >record scope and evidence separately</text>
+<text x="770" y="2073" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="700" text-anchor="middle" >No single cross-system transaction · fraud-sink physical cleanup is separate and not immediate · 60 seconds is an internal SLO</text>
+<rect x="100" y="2185" width="460" height="270" rx="14" fill="#0F1A15" stroke="#2EA043" stroke-width="1.8"/>
+<rect x="102" y="2199" width="4" height="242" rx="2" fill="#2EA043"/>
+<text x="120" y="2216" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" fill="#EAF0FA" font-weight="700" text-anchor="start" >Databricks SQL — dashboards &amp; alerts</text>
+<text x="120" y="2237" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="400" text-anchor="start" >independent observability plane</text>
+<text x="120" y="2275" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2275" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >cards: internal SLO · fraud · quality</text>
+<text x="120" y="2301" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2301" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >system tables + access/lineage evidence</text>
+<text x="120" y="2327" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2327" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >alerts: quality or internal SLO breach</text>
+<text x="120" y="2353" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2353" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >Article 17 request evidence by run</text>
+<text x="120" y="2379" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2379" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >logical/export/fraud-sink evidence shown separately</text>
+<text x="120" y="2405" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2405" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >AppKit reads governed Gold + governance data</text>
+<rect x="600" y="2185" width="460" height="270" rx="14" fill="#0F1A15" stroke="#2EA043" stroke-width="1.8"/>
+<rect x="602" y="2199" width="4" height="242" rx="2" fill="#2EA043"/>
+<text x="620" y="2216" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" fill="#EAF0FA" font-weight="700" text-anchor="start" >Pseudonymized governed export → remote sync</text>
+<text x="620" y="2237" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="400" text-anchor="start" >notebooks/04_export_lake.py · L6 verification</text>
+<text x="620" y="2275" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="634" y="2275" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >allow-list: pseudonymized Silver + Gold</text>
+<text x="620" y="2301" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="634" y="2301" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >Bronze + restricted quarantine blocked</text>
+<text x="620" y="2327" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="634" y="2327" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >/Volumes/eurostream/lake/exports</text>
+<text x="620" y="2353" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="634" y="2353" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >optional Hugging Face sync updates current tree only</text>
+<text x="620" y="2379" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="634" y="2379" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >stable IDs + hashes remain personal data</text>
+<text x="620" y="2405" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="634" y="2405" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >remote history remains separate evidence</text>
+<rect x="1100" y="2185" width="340" height="270" rx="14" fill="#0F1A15" stroke="#2EA043" stroke-width="1.8"/>
+<rect x="1102" y="2199" width="4" height="242" rx="2" fill="#2EA043"/>
+<text x="1120" y="2216" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" fill="#EAF0FA" font-weight="700" text-anchor="start" >Native AppKit App</text>
+<text x="1120" y="2237" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="400" text-anchor="start" >React + TypeScript on Databricks Apps</text>
+<text x="1120" y="2275" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="1134" y="2275" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >AppKit UI with governed operational views</text>
+<text x="1120" y="2301" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="1134" y="2301" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >allow-listed OBO SQL → Gold + governance</text>
+<text x="1120" y="2327" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="1134" y="2327" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >no direct Bronze/Silver/quarantine SQL or PAT</text>
+<text x="1120" y="2353" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="1134" y="2353" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >HMAC preview + exact customer-ID confirm</text>
+<text x="1120" y="2379" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="1134" y="2379" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >one typed run → eurostream_art17_erasure</text>
+<text x="1120" y="2405" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="1134" y="2405" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >sanitized status; no generic Job route</text>
+<text x="100" y="2545" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" fill="#8B949E" font-weight="700" text-anchor="start" >OPTIONAL DEPLOYMENT PLANE — manual workspace setup remains the source of truth</text>
+<rect x="100" y="2560" width="660" height="240" rx="14" fill="#151B2E" stroke="#2EA043" stroke-width="1.8"/>
+<rect x="102" y="2574" width="4" height="212" rx="2" fill="#2EA043"/>
+<text x="120" y="2591" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" fill="#EAF0FA" font-weight="700" text-anchor="start" >CI checks — independent showcase gate</text>
+<text x="120" y="2612" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="400" text-anchor="start" >Asset Bundles remain optional after rehearsal</text>
+<text x="120" y="2645" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2645" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >PR: make gate → ruff · mypy · pytest</text>
+<text x="120" y="2669" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2669" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >PR: contracts + databricks bundle validate</text>
+<text x="120" y="2693" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2693" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >review governed schema and DDL changes</text>
+<text x="120" y="2717" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2717" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >merge → optional development bundle deploy</text>
+<text x="120" y="2741" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2741" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >run a non-production workspace rehearsal first</text>
+<text x="120" y="2765" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2EA043" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2765" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >secrets remain in Databricks secret scopes</text>
+<rect x="800" y="2560" width="640" height="240" rx="14" fill="#151B2E" stroke="#2E7CF6" stroke-width="1.8"/>
+<rect x="802" y="2574" width="4" height="212" rx="2" fill="#2E7CF6"/>
+<text x="820" y="2591" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" fill="#EAF0FA" font-weight="700" text-anchor="start" >Databricks Asset Bundles — optional reproduction</text>
+<text x="820" y="2612" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#8B949E" font-weight="400" text-anchor="start" >dab/databricks.yml + dab/resources/*.yml</text>
+<text x="820" y="2645" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2E7CF6" font-weight="700" text-anchor="start" >•</text>
+<text x="834" y="2645" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >reviewed resources: pipelines, Jobs, and App</text>
+<text x="820" y="2669" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2E7CF6" font-weight="700" text-anchor="start" >•</text>
+<text x="834" y="2669" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >parameters, resource IDs, and presets resolved</text>
+<text x="820" y="2693" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2E7CF6" font-weight="700" text-anchor="start" >•</text>
+<text x="834" y="2693" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >notebooks + Lakeflow sources uploaded as artifacts</text>
+<text x="820" y="2717" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2E7CF6" font-weight="700" text-anchor="start" >•</text>
+<text x="834" y="2717" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >UI-created resources stay authoritative until validated</text>
+<text x="820" y="2741" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2E7CF6" font-weight="700" text-anchor="start" >•</text>
+<text x="834" y="2741" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >development and production targets remain separate</text>
+<text x="820" y="2765" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#2E7CF6" font-weight="700" text-anchor="start" >•</text>
+<text x="834" y="2765" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >redeploy a reviewed ref for rollback</text>
+<text x="100" y="2825" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" fill="#8B949E" font-weight="700" text-anchor="start" >CROSS-CUTTING CONCERNS</text>
+<rect x="100" y="2845" width="440" height="220" rx="14" fill="#151B2E" stroke="#9B6BF2" stroke-width="1.8"/>
+<rect x="102" y="2859" width="4" height="192" rx="2" fill="#9B6BF2"/>
+<text x="120" y="2876" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" fill="#EAF0FA" font-weight="700" text-anchor="start" >Secrets &amp; configuration</text>
+<text x="120" y="2925" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#9B6BF2" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2925" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >secret scope eurostream (AKV/SM target)</text>
+<text x="120" y="2949" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#9B6BF2" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2949" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >pii_salt · Kafka auth · HF token if used</text>
+<text x="120" y="2973" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#9B6BF2" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2973" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >bundle variables use reviewed defaults</text>
+<text x="120" y="2997" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#9B6BF2" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="2997" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >60-second value is an internal SLO, not law</text>
+<text x="120" y="3021" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#9B6BF2" font-weight="700" text-anchor="start" >•</text>
+<text x="134" y="3021" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >real secrets injected at deployment</text>
+<rect x="580" y="2845" width="440" height="220" rx="14" fill="#151B2E" stroke="#35B8C9" stroke-width="1.8"/>
+<rect x="582" y="2859" width="4" height="192" rx="2" fill="#35B8C9"/>
+<text x="600" y="2876" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" fill="#EAF0FA" font-weight="700" text-anchor="start" >Observability</text>
+<text x="600" y="2925" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#35B8C9" font-weight="700" text-anchor="start" >•</text>
+<text x="614" y="2925" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >system.lakeflow job/pipeline timelines</text>
+<text x="600" y="2949" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#35B8C9" font-weight="700" text-anchor="start" >•</text>
+<text x="614" y="2949" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >system.billing.usage → budget alerts</text>
+<text x="600" y="2973" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#35B8C9" font-weight="700" text-anchor="start" >•</text>
+<text x="614" y="2973" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >system.access table/column lineage</text>
+<text x="600" y="2997" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#35B8C9" font-weight="700" text-anchor="start" >•</text>
+<text x="614" y="2997" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >SQL alerts: quality + internal SLO</text>
+<text x="600" y="3021" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#35B8C9" font-weight="700" text-anchor="start" >•</text>
+<text x="614" y="3021" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >logical/export/fraud-sink evidence shown separately</text>
+<rect x="1060" y="2845" width="380" height="220" rx="14" fill="#151B2E" stroke="#E6B84A" stroke-width="1.8"/>
+<rect x="1062" y="2859" width="4" height="192" rx="2" fill="#E6B84A"/>
+<text x="1080" y="2876" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" fill="#EAF0FA" font-weight="700" text-anchor="start" >Cost &amp; performance</text>
+<text x="1080" y="2925" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#E6B84A" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="2925" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >serverless + Photon</text>
+<text x="1080" y="2949" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#E6B84A" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="2949" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >full-refresh Silver Lakeflow materialized view</text>
+<text x="1080" y="2973" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#E6B84A" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="2973" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >SQL warehouse sizing + stop policy</text>
+<text x="1080" y="2997" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#E6B84A" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="2997" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >DBU budget alerts</text>
+<text x="1080" y="3021" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#E6B84A" font-weight="700" text-anchor="start" >•</text>
+<text x="1094" y="3021" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#C9D1D9" font-weight="400" text-anchor="start" >workspace rehearsal before deployment claims</text>
+<path d="M 180,345 L 180,365" fill="none" stroke="#8B949E" stroke-width="2.6" marker-end="url(#a)" stroke-linejoin="round"/>
+<path d="M 500,345 L 500,355 L 700,355 L 700,365" fill="none" stroke="#8B949E" stroke-width="2.6" marker-end="url(#a)" stroke-linejoin="round"/>
+<path d="M 770,345 L 770,365" fill="none" stroke="#8B949E" stroke-width="2.6" marker-end="url(#a)" stroke-linejoin="round"/>
+<path d="M 600,545 L 600,645" fill="none" stroke="#8B949E" stroke-width="2.6" marker-end="url(#a)" stroke-linejoin="round"/>
+<path d="M 480,545 L 540,545 L 540,645" fill="none" stroke="#E6B84A" stroke-width="2.6" stroke-dasharray="7 5" marker-end="url(#aa)" stroke-linejoin="round"/>
+<text x="552" y="600" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10" fill="#E6B84A" font-weight="700" text-anchor="start" >alerts</text>
+<path d="M 585,905 L 585,935" fill="none" stroke="#8B949E" stroke-width="2.2" marker-end="url(#a)" stroke-linejoin="round"/>
+<path d="M 585,1009 L 585,1039" fill="none" stroke="#8B949E" stroke-width="2.2" marker-end="url(#a)" stroke-linejoin="round"/>
+<path d="M 585,1279 L 585,1309" fill="none" stroke="#8B949E" stroke-width="2.2" marker-end="url(#a)" stroke-linejoin="round"/>
+<path d="M 585,1383 L 585,1413" fill="none" stroke="#8B949E" stroke-width="2.2" marker-end="url(#a)" stroke-linejoin="round"/>
+<path d="M 140,1505 L 65,1505 L 65,2335 L 100,2335" fill="none" stroke="#2EA043" stroke-width="2.6" marker-end="url(#ag)" stroke-linejoin="round"/>
+<text x="46" y="2210" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10" fill="#2EA043" font-weight="700" text-anchor="start" >gold.*</text>
+<path d="M 1400,260 L 1470,260 L 1470,1736 L 1070,1736 L 1070,1795" fill="none" stroke="#FF3621" stroke-width="2.6" stroke-dasharray="8 5" marker-end="url(#ar)" stroke-linejoin="round"/>
+<text x="1480" y="620" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#FF3621" font-weight="800" text-anchor="start" >AppKit request</text>
+<path d="M 970,1795 L 970,1680" fill="none" stroke="#FF3621" stroke-width="3" marker-end="url(#ar)" stroke-linejoin="round"/>
+<text x="984" y="1745" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#FF3621" font-weight="700" text-anchor="start" >prepare + Silver/Gold refresh</text>
+<path d="M 1060,2055 L 1060,2125 L 950,2125 L 950,2185" fill="none" stroke="#FF3621" stroke-width="2.6" stroke-dasharray="7 5" marker-end="url(#ar)" stroke-linejoin="round"/>
+<text x="1080" y="2142" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#FF3621" font-weight="700" text-anchor="start" >L6 export</text>
+<path d="M 765,1795 L 765,1685" fill="none" stroke="#9B6BF2" stroke-width="2.6" marker-end="url(#ap)" stroke-linejoin="round"/>
+<text x="779" y="1745" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#9B6BF2" font-weight="700" text-anchor="start" >6 DQ gates → governance.*</text>
+<path d="M 760,2680 L 800,2680" fill="none" stroke="#8B949E" stroke-width="2.6" marker-end="url(#a)" stroke-linejoin="round"/>
+<path d="M 1120,2560 L 1120,2506" fill="none" stroke="#2E7CF6" stroke-width="2.6" stroke-dasharray="7 5" marker-end="url(#ab)" stroke-linejoin="round"/>
+<text x="1136" y="2536" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#60A5FA" font-weight="700" text-anchor="start" >optional reviewed bundle deploy</text>
+<text x="100" y="3110" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#8B949E" font-weight="800" text-anchor="start" >LEGEND</text>
+<rect x="100" y="3125" width="16" height="16" rx="4" fill="#CD8032"/>
+<text x="124" y="3138" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >bronze (restricted)</text>
+<rect x="275" y="3125" width="16" height="16" rx="4" fill="#9AA7B8"/>
+<text x="299" y="3138" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >silver (pseudonymized)</text>
+<rect x="450" y="3125" width="16" height="16" rx="4" fill="#E6B84A"/>
+<text x="474" y="3138" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >gold (pseudonymized)</text>
+<rect x="625" y="3125" width="16" height="16" rx="4" fill="#9B6BF2"/>
+<text x="649" y="3138" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >governance &amp; volumes</text>
+<rect x="800" y="3125" width="16" height="16" rx="4" fill="#FF3621"/>
+<text x="824" y="3138" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >Lakeflow &amp; streaming</text>
+<rect x="975" y="3125" width="16" height="16" rx="4" fill="#FF6B4A"/>
+<text x="999" y="3138" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >Workflows + erasure</text>
+<rect x="1150" y="3125" width="16" height="16" rx="4" fill="#2EA043"/>
+<text x="1174" y="3138" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >AppKit + serving</text>
+<rect x="1325" y="3125" width="16" height="16" rx="4" fill="#2E7CF6"/>
+<text x="1349" y="3138" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" fill="#C9D1D9" font-weight="400" text-anchor="start" >optional CI/CD</text>
+<text x="100" y="3195" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#8B949E" font-weight="400" text-anchor="start" >Standalone Databricks portfolio showcase · deterministic SVG generated by databricks/assets/generate_stack.py</text>
+<text x="100" y="3218" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" fill="#8B949E" font-weight="400" text-anchor="start" >No dependency on the local app · fraud-sink cleanup, remote sync, Kafka, backups, and checkpoints are separate evidence domains</text>
+</svg>

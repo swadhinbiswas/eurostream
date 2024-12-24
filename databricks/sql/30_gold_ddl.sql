@@ -1,0 +1,28 @@
+-- REFERENCE ONLY — THIS FILE MUST NOT BE RUN AS A SQL BOOTSTRAP.
+--
+-- Lakeflow owns every Gold target listed here as a materialized view. The
+-- target tables must be created by the pipeline after Silver publication. Do
+-- not pre-create them in a separate SQL session.
+--
+-- Gold is pseudonymized, not anonymous: stable customer_id values and
+-- deterministic email/IBAN hashes remain personal data and require restricted
+-- access plus a documented risk assessment before any external publication.
+--
+-- Pipeline-owned targets and column contracts:
+--
+--   customer_360
+--     customer_id, country, email_hash, order_count, lifetime_spend_eur,
+--     first_order_at, last_order_at, consents_marketing, marketing_consent
+--
+--   order_facts
+--     order_id, customer_id, email_hash, iban_hash, country, amount_eur,
+--     currency, occurred_at, consents_marketing
+--
+--   fraud_summary
+--     customer_id, alert_count, velocity_alerts, zscore_alerts, geo_alerts,
+--     max_score, last_alert_at, last_alert
+--
+-- The Python materialized-view definitions are the source of truth for
+-- target creation, uniqueness, suppression filtering, consent aliases, and
+-- the UI-compatible last_alert field. This file is validation/reference
+-- guidance only and intentionally contains no executable target DDL.

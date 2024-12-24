@@ -1,0 +1,41 @@
+-- REFERENCE ONLY — THIS FILE MUST NOT BE RUN AS A SQL BOOTSTRAP.
+--
+-- Lakeflow owns every Silver target listed here as a materialized view. The
+-- target tables must be created by the pipeline after 00_catalogs.sql and the
+-- Bronze publication. Do not pre-create them in a separate SQL session.
+--
+-- Silver is a full-refresh materialized view over the current Bronze Delta
+-- snapshot. Window functions shape that snapshot; they are not presented as
+-- a streaming/global deduplication mechanism. Bronze REPLACE USING is a Beta
+-- DBR 18.2+ flow, so reading its current snapshot is intentional.
+--
+-- Pipeline-owned targets and column contracts:
+--
+--   customers
+--     customer_id, country, email_hash, iban_hash, marketing_consent,
+--     _silver_at
+--
+--   orders
+--     event_id, order_id, customer_id, email_hash, iban_hash, iban_valid,
+--     country, amount_eur, currency, marketing_consent, _occurred_at,
+--     _silver_at, _source
+--
+--   payments
+--     event_id, payment_id, order_id, customer_id, iban_hash, iban_valid,
+--     amount_eur, country, merchant_country, status, _occurred_at,
+--     _silver_at, _source
+--
+--   orders_quarantine
+--     quarantine_id, event_id, order_id, customer_id, email, iban, country,
+--     amount_eur, occurred_at, source_name, quarantine_reason,
+--     _quarantined_at
+--
+--   payments_quarantine
+--     quarantine_id, event_id, payment_id, order_id, customer_id, iban,
+--     country, merchant_country, amount_eur, status, occurred_at,
+--     source_name, quarantine_reason, _quarantined_at
+--
+-- Normal Silver targets contain salted SHA-256 values only. Raw PII exists
+-- only in the restricted quarantine views, which are also pipeline-owned.
+-- The Python decorators are the source of truth for target creation and
+-- refresh behavior; this file is validation/reference guidance only.

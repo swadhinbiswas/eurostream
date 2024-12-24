@@ -83,12 +83,14 @@ class KafkaProducer(Producer):
             if err is not None:
                 logger.error("Kafka delivery error on topic %s: %s", topic, err)
 
-        # confluent-kafka expects headers as list of (str, bytes)
-        kafka_headers = [(k, v.encode()) for k, v in (headers or {}).items()] if headers else None
+        # confluent-kafka expects headers as list of (str, bytes/str/None)
+        kafka_headers: list[tuple[str, str | bytes | None]] | None = None
+        if headers:
+            kafka_headers = [(k, v.encode("utf-8")) for k, v in headers.items()]
         self._producer.produce(
             topic,
-            key=key.encode(),
-            value=value.encode(),
+            key=key.encode("utf-8"),
+            value=value.encode("utf-8"),
             headers=kafka_headers,
             on_delivery=_on_delivery,
         )
@@ -115,6 +117,7 @@ class KafkaConsumer(Consumer):
     ) -> None:
         from confluent_kafka import Consumer as _CConsumer
 
+        self._topic = topic
         clean = _parse_bootstrap(bootstrap_servers)
         conf: dict[str, Any] = {
             "bootstrap.servers": clean,
@@ -153,17 +156,47 @@ class KafkaConsumer(Consumer):
                 pass
             logger.warning("Kafka poll error: %s", err)
             return None
+
+        msg_topic: str = msg.topic() or self._topic
+        raw_key = msg.key()
+        key_str = (
+            raw_key.decode("utf-8")
+            if isinstance(raw_key, (bytes, bytearray))
+            else str(raw_key or "")
+        )
+        raw_val = msg.value()
+        val_str = (
+            raw_val.decode("utf-8")
+            if isinstance(raw_val, (bytes, bytearray))
+            else str(raw_val or "")
+        )
+        offset_val = msg.offset()
+        offset_int: int = int(offset_val) if offset_val is not None else 0
+        part_val = msg.partition()
+        part_int: int = int(part_val) if part_val is not None else 0
+        ts_tuple = msg.timestamp()
+        ts_float: float = (
+            (ts_tuple[1] / 1000.0) if ts_tuple and len(ts_tuple) > 1 and ts_tuple[1] > 0 else 0.0
+        )
+
+        headers_dict: dict[str, str] = {}
+        raw_hdrs = msg.headers()
+        if isinstance(raw_hdrs, list):
+            for item in raw_hdrs:
+                if isinstance(item, tuple) and len(item) == 2:
+                    hk, hv = item
+                    headers_dict[str(hk)] = (
+                        hv.decode("utf-8") if isinstance(hv, (bytes, bytearray)) else str(hv or "")
+                    )
+
         return Record(
-            topic=msg.topic(),
-            key=msg.key().decode() if msg.key() else "",
-            value=msg.value().decode() if msg.value() else "",
-            offset=msg.offset(),
-            partition=msg.partition(),
-            timestamp=msg.timestamp()[1] / 1000.0,
-            headers={
-                k: (v.decode() if isinstance(v, (bytes, bytearray)) else (v or ""))
-                for k, v in (msg.headers() or [])
-            },
+            topic=msg_topic,
+            key=key_str,
+            value=val_str,
+            offset=offset_int,
+            partition=part_int,
+            timestamp=ts_float,
+            headers=headers_dict,
         )
 
     def commit(self) -> None:

@@ -1,0 +1,32 @@
+# Optional App resource.  It is included only because the existing AppKit
+# source and app.yaml already expose the exact resource keys consumed below.
+# App deployment is intentionally not started by bundle deploy.
+resources:
+  apps:
+    eurostream_showcase:
+      name: eurostream-dashboard
+      description: Restricted pseudonymized EuroStream analytics and guarded Article 17 showcase.
+      source_code_path: ../app
+      lifecycle:
+        started: false
+      user_api_scopes:
+        - sql
+      permissions:
+        - level: CAN_USE
+          group_name: eurostream_dpo_operators
+        - level: CAN_MANAGE
+          group_name: eurostream_platform_admins
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.sql_warehouse_id}
+            permission: CAN_USE
+        - name: erasure-job
+          job:
+            id: ${resources.jobs.eurostream_art17_erasure.id}
+            permission: CAN_MANAGE_RUN
+        - name: preview-secret
+          secret:
+            scope: ${var.preview_secret_scope}
+            key: ${var.preview_secret_key}
+            permission: READ

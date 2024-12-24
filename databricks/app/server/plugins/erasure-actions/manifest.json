@@ -1,0 +1,37 @@
+{
+  "$schema": "https://databricks.github.io/appkit/schemas/plugin-manifest.schema.json",
+  "name": "erasureActions",
+  "displayName": "EuroStream Erasure Actions",
+  "description": "Guarded, confirmed Article 17 job submission and run-status endpoints",
+  "resources": {
+    "required": [
+      {
+        "type": "job",
+        "alias": "Article 17 erasure job",
+        "resourceKey": "erasure-job",
+        "description": "The single governed Lakeflow Job that performs the erasure cascade",
+        "permission": "CAN_MANAGE_RUN",
+        "fields": {
+          "id": {
+            "env": "DATABRICKS_JOB_ID",
+            "description": "Numeric ID of the Article 17 erasure job"
+          }
+        }
+      },
+      {
+        "type": "secret",
+        "alias": "Erasure preview signing secret",
+        "resourceKey": "preview-secret",
+        "description": "Secret used to sign short-lived, user-bound erasure previews",
+        "permission": "READ",
+        "fields": {
+          "value": {
+            "env": "EUROSTREAM_PREVIEW_SECRET",
+            "description": "Secret value used for HMAC-SHA256 preview signatures"
+          }
+        }
+      }
+    ],
+    "optional": []
+  }
+}

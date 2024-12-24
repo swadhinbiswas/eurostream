@@ -34,6 +34,17 @@ site/.astro/
 # Personal interview notes — never committed
 notes/
 
+# Databricks implementation is portfolio-visible, but the private operator
+# runbook contains environment-specific IDs and click-by-click setup details.
+docs/databricks/
+
+# Local Databricks CLI/Bundles state.
+.databricks/
+databricks-target-*/
+.databricks-bundle/
+**/databricks/.dab-cache/
+*.dab-cache/
+
 # IDE / Editor
 mimocode/
 .mimocode/

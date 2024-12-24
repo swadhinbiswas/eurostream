@@ -1,0 +1,105 @@
+# Lakeflow Declarative Pipelines resources.
+#
+# The Python source attached below is the owner of the medallion relations.  Do
+# not add CREATE TABLE resources or execute sql/10_bronze_ddl.sql,
+# sql/20_silver_ddl.sql, or sql/30_gold_ddl.sql as a bootstrap step.  The
+# Bronze @dp.table declarations use REPLACE USING, whose Beta implementation
+# requires a streaming source, a target created inside the pipeline, and DBR
+# 18.2+ (the CURRENT channel is used here and must be checked in the target
+# workspace before promotion).  Lakeflow manages the concrete DBR version;
+# there is no supported user-settable pipeline spark_version field to pin.
+resources:
+  pipelines:
+    eurostream_bronze:
+      name: eurostream_bronze
+      catalog: ${var.catalog}
+      schema: ${var.bronze_schema}
+      serverless: true
+      channel: CURRENT
+      edition: ADVANCED
+      photon: true
+      # A continuous Job owns Bronze execution.  Keeping the pipeline in
+      # triggered mode avoids the old built-in-continuous/scheduled-job mix.
+      continuous: false
+      cascade_on_destroy: false
+      libraries:
+        - file:
+            path: ../dlt/bronze_ingest.py
+      configuration:
+        pipelines.trigger.interval: "10 seconds"
+        eurostream.kafka.bootstrap: ${var.kafka_bootstrap}
+        eurostream.kafka.secret_scope: ${var.runtime_secret_scope}
+      notifications:
+        - alerts:
+            - on-update-failure
+            - on-update-fatal-failure
+            - on-flow-failure
+          email_recipients:
+            - ${var.on_call_email}
+      run_as:
+        group_name: ${var.pipeline_run_as_group}
+      permissions:
+        - level: CAN_VIEW
+          group_name: eurostream_dpo_operators
+        - level: CAN_MANAGE
+          group_name: eurostream_platform_admins
+
+    eurostream_silver:
+      name: eurostream_silver
+      catalog: ${var.catalog}
+      schema: ${var.silver_schema}
+      serverless: true
+      channel: CURRENT
+      edition: ADVANCED
+      photon: true
+      continuous: false
+      cascade_on_destroy: false
+      libraries:
+        - file:
+            path: ../dlt/silver_pseudonymize.py
+      configuration:
+        # Spark resolves this secret reference at update time.  No salt value
+        # is stored in this Bundle or in a pipeline configuration response.
+        eurostream.pii.salt: "{{secrets/${var.runtime_secret_scope}/${var.pii_salt_secret_key}}}"
+      notifications:
+        - alerts:
+            - on-update-failure
+            - on-update-fatal-failure
+            - on-flow-failure
+          email_recipients:
+            - ${var.on_call_email}
+      run_as:
+        group_name: ${var.pipeline_run_as_group}
+      permissions:
+        - level: CAN_VIEW
+          group_name: eurostream_dpo_operators
+        - level: CAN_MANAGE
+          group_name: eurostream_platform_admins
+
+    eurostream_gold:
+      name: eurostream_gold
+      catalog: ${var.catalog}
+      schema: ${var.gold_schema}
+      serverless: true
+      channel: CURRENT
+      edition: ADVANCED
+      photon: true
+      continuous: false
+      cascade_on_destroy: false
+      libraries:
+        - file:
+            path: ../dlt/gold_consent_gated.py
+      notifications:
+        - alerts:
+            - on-update-failure
+            - on-update-fatal-failure
+            - on-flow-failure
+          email_recipients:
+            - ${var.on_call_email}
+      run_as:
+        group_name: ${var.pipeline_run_as_group}
+      permissions:
+        - level: CAN_VIEW
+          group_name: eurostream_dpo_operators
+        - level: CAN_MANAGE
+          group_name: eurostream_platform_admins

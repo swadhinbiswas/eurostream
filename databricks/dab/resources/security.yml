@@ -1,0 +1,16 @@
+# Workspace secret-scope configuration.  This resource manages the scope and
+# ACLs only; it never creates a secret value.  Provision pii_salt,
+# kafka_username, kafka_password, hf_token, and EUROSTREAM_PREVIEW_SECRET
+# through the approved secret-management path before running the workloads.
+resources:
+  secret_scopes:
+    eurostream_runtime:
+      name: ${var.runtime_secret_scope}
+      backend_type: DATABRICKS
+      permissions:
+        - group_name: ${var.pipeline_run_as_group}
+          level: READ
+        - group_name: ${var.fraud_run_as_group}
+          level: READ
+        - group_name: eurostream_platform_admins
+          level: MANAGE

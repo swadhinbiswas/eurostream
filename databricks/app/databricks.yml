@@ -1,0 +1,48 @@
+bundle:
+  name: eurostream-databricks-showcase
+
+variables:
+  warehouse_id:
+    description: Existing serverless SQL warehouse used by the showcase
+  erasure_job_id:
+    description: Existing Article 17 erasure Lakeflow Job
+  preview_secret_scope:
+    description: Workspace secret scope containing EUROSTREAM_PREVIEW_SECRET
+  preview_secret_key:
+    default: EUROSTREAM_PREVIEW_SECRET
+
+resources:
+  apps:
+    dashboard:
+      name: eurostream-dashboard
+      description: Databricks-native EuroStream analytics and Article 17 governance showcase
+      source_code_path: .
+      lifecycle:
+        started: true
+      user_api_scopes:
+        - sql
+      permissions:
+        - level: CAN_USE
+          group_name: eurostream_dpo_operators
+        - level: CAN_MANAGE
+          group_name: eurostream_platform_admins
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+        - name: erasure-job
+          job:
+            id: ${var.erasure_job_id}
+            permission: CAN_MANAGE_RUN
+        - name: preview-secret
+          secret:
+            scope: ${var.preview_secret_scope}
+            key: ${var.preview_secret_key}
+            permission: READ
+
+targets:
+  default:
+    default: true
+    workspace:
+      host: https://<workspace-host>

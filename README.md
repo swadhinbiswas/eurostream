@@ -2,157 +2,173 @@
 
 # EuroStream
 
-**The Sovereign, GDPR-Native Streaming &amp; Medallion Lakehouse Architecture for European Commerce**
+A Python reference implementation for streaming fraud detection, medallion analytics, and GDPR erasure workflows in European commerce.
 
 [![CI Pipeline](https://github.com/swadhinbiswas/eurostream/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/swadhinbiswas/eurostream/actions/workflows/ci.yml)
 [![Orchestration DAG](https://github.com/swadhinbiswas/eurostream/actions/workflows/orchestrate.yml/badge.svg?branch=master)](https://github.com/swadhinbiswas/eurostream/actions/workflows/orchestrate.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![Tests Passing](https://img.shields.io/badge/tests-59%20passed-brightgreen?style=flat-square)](https://github.com/swadhinbiswas/eurostream/actions)
+[![Tests Passing](https://img.shields.io/badge/tests-77%20passed-brightgreen?style=flat-square)](https://github.com/swadhinbiswas/eurostream/actions)
 [![Mypy Strict](https://img.shields.io/badge/mypy-strict-2b94ec?style=flat-square)](https://mypy.readthedocs.io)
 [![Ruff](https://img.shields.io/badge/linter-ruff-black?style=flat-square)](https://github.com/astral-sh/ruff)
 [![License: MIT](https://img.shields.io/badge/license-MIT-black?style=flat-square)](LICENSE)
 
-[**Live Interactive Docs**](https://eurostream-docs.pages.dev) · [**Public Parquet Lake**](https://huggingface.co/datasets/swadhinbiswas/eustream) · [**JOSS Research Paper**](paper/paper.md) · [**Architecture RFC**](docs/rfc/0001-platform-design.md)
-
-<br/>
-
-<img src="assets/endtoendsystem.png" alt="EuroStream End-to-End System Architecture" width="940"/>
+[Live documentation](https://eurostream-docs.pages.dev) · [Public Parquet lake](https://huggingface.co/datasets/swadhinbiswas/eustream) · [JOSS research paper](paper/paper.md) · [Architecture RFC](docs/rfc/0001-platform-design.md)
 
 </div>
 
----
+## Why erasure needs an architecture
 
-## 1. Executive Summary &amp; Problem Domain
+Append-only event logs and immutable Parquet files are efficient for analytics. They also make targeted erasure awkward. Deleting a source row does not remove the same person's data from broker partitions, derived tables, processor memory, replicas, or exported files.
 
-### The Fundamental Friction: Big Data Immutability vs. European Data Sovereignty
-Modern data infrastructure is fundamentally engineered around **immutable append-only write paths**:
-* Distributed message logs (Apache Kafka, AWS Kinesis) append raw event payloads into append-only partitions.
-* Modern columnar lakehouses (Delta Lake, Apache Iceberg, Apache Hudi) write immutable Parquet data files.
+EuroStream treats erasure as a cross-system workflow. It pseudonymizes records at the Silver boundary, can pass suppression state to the streaming processor, updates the warehouse, and exposes a verification endpoint. The repository is an implementation of those patterns, not a certification of GDPR compliance or a guarantee of physical deletion from external systems.
 
-Under the **European Union General Data Protection Regulation (Regulation (EU) 2016/679 - GDPR)**, this immutable paradigm collides directly with mandatory statutory obligations:
+The design is based on four parts of GDPR:
 
-1. **Article 17 ("Right to Erasure / Right to be Forgotten")**: The data subject has the legally enforceable right to obtain from the controller the erasure of personal data without undue delay (Article 12(3) statutory SLA).
-2. **Article 6 &amp; 7 ("Lawfulness of Processing &amp; Dynamic Consent Gating")**: Marketing dimensions and customer analytical profiles must dynamically enforce opt-in state without requiring full table re-ingestions.
-3. **Article 25 ("Data Protection by Design and by Default")**: Pseudonymization and data minimization must be architectural invariants enforced at the ingestion boundary.
-4. **Article 32 ("Security of Processing")**: Clear-text PII (e.g., European IBANs, email addresses, IP coordinates) must never escape to external query layers or public data lakes.
+1. Article 17: support requests for erasure without undue delay.
+2. Articles 6 and 7: carry marketing consent into analytical records and check that downstream transformations preserve it.
+3. Article 25: use pseudonymization and data minimization in the storage design.
+4. Article 32: keep clear-text PII inside the internal boundary and protect the systems that process it.
 
-Statutory non-compliance carries administrative fines up to **€20,000,000 or 4% of total worldwide annual turnover** (GDPR Art. 83(5)), along with severe civil liability and operational injunctions across EU member states.
+Article 83(5) sets administrative fines at up to €20,000,000 or 4% of worldwide annual turnover, whichever is higher.
 
 <p align="center">
-  <img src="assets/GDRP.png" alt="Architectural Conflict: Big Data Lakehouses vs GDPR Regulation" width="920"/>
+  <img src="assets/GDRP.png" alt="Conflict between append-only lakehouse storage and GDPR erasure requirements" width="920"/>
 </p>
 
-**EuroStream** resolves this fundamental architectural conflict. It provides a sovereign, GDPR-native Lambda and Medallion Lakehouse platform implemented in pure Python. It unifies real-time windowed fraud detection, vectorized microsecond analytical querying, cloud-replicated multi-engine persistence, and a verified **Six-Layer Deletion Cascade** that executes sub-second physical and cryptographic erasures across all storage tiers with zero ghost records.
+The local runtime includes event production, fraud scoring, Bronze, Silver, and Gold transformations, optional Turso synchronization, local Parquet export, a FastAPI dashboard, and a staged erasure request. Some external and runtime steps remain separate operations; the sections below state where the current implementation stops.
 
----
+## Quickstart
 
-## 2. Anatomy of the 5 Critical Failure Points in Big Data Compliance
+### Prerequisites
 
-Enterprise data architectures routinely fail GDPR compliance during production operations. Below is the technical breakdown of the 5 critical failure modes and how EuroStream eliminates each:
+- Python 3.11+
+- [`uv`](https://docs.astral.sh/uv/) package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+
+### Run the local demo
+
+The demo runs synthetic orders, clicks, and payments through fraud scoring, the medallion pipeline, an erasure request, and a local verification pass.
+
+```bash
+git clone https://github.com/swadhinbiswas/eurostream.git
+cd eurostream
+uv sync
+uv run eurostream demo
+```
+
+### Run each pipeline stage
+
+The stages can also be run independently:
+
+```bash
+# 1. Produce 500 synthetic EU orders, clicks, and payments onto the bus
+uv run eurostream produce --events 500
+
+# 2. Consume payments and score fraud anomalies in real time
+uv run eurostream stream --max-events 500
+
+# 3. Execute Medallion DAG (Bronze -> Silver -> Gold -> Quality Gates -> Lake Export)
+uv run eurostream transform --incremental
+
+# 4. Probe & sync local warehouse state to Turso cloud database
+uv run eurostream probe-turso
+uv run eurostream sync-turso
+
+# 5. Execute synchronous right-to-erasure for a target customer
+uv run eurostream erase cust_424242
+
+# 6. Verify schema contracts against committed baseline
+uv run eurostream contracts --baseline governance/contracts.json
+```
+
+### Start the web UI and API
+
+```bash
+uv run uvicorn eurostream.api:app --reload --port 7860
+```
+
+Open [http://localhost:7860/](http://localhost:7860/) for the demo dashboard:
+
+- Overview shows warehouse throughput, consent distribution, and fraud rule counts.
+- Fraud Intelligence lists anomaly alerts and supports rule filters.
+- Medallion and 360 provides Customer 360 search and erasure controls.
+- GDPR Art. 17 shows the local erasure flow and confirmation record.
+- Prometheus Explorer provides access to the in-process metrics endpoint.
+
+The API queues erasure requests by default and does not start a worker process. Use synchronous local execution or run a worker separately when testing the queued path. Some dashboard panels are shells because the current tab loader does not populate every view.
+
+## System architecture
+
+EuroStream separates streaming scoring from batch transformation. Both paths use the event bus and warehouse, and the CLI writes streaming alerts to the `bronze.fraud_alerts` table consumed by the Gold transform.
 
 <p align="center">
-  <img src="assets/failure.png" alt="The 5 Critical Failure Points in Big Data Compliance and EuroStream Solutions" width="920"/>
+  <img src="assets/endtoendsystem.png" alt="EuroStream end-to-end system architecture" width="940"/>
 </p>
 
----
+- The streaming path scores payment events and records fraud alerts.
+- The batch path moves data through `Bronze`, `Silver`, and `Gold` with watermarks and quality checks.
+- `SqliteBus` uses SQLite WAL and `BEGIN IMMEDIATE` locally; `KafkaBus` connects to Aiven with SASL_SSL and SCRAM-SHA-256 in hosted environments.
 
-### Failure Point 1: The Immutable Append-Only Log Paradox (Kafka Retention)
-* **The Failure**: Distributed log brokers (Kafka / Kinesis) retain raw event streams across partitions. Rewriting historical topic partitions or mutating consumer group offsets to purge an individual customer's PII is computationally intractable and leads to downstream partition corruption.
-* **EuroStream's Solution**: **Dual-Path Cryptographic Anonymization**:
-  1. Incoming records are pseudonymized with a deterministic salted SHA-256 hash $H(s, x) = \text{SHA256}(s \parallel \text{": "} \parallel x)$ at the Silver boundary.
-  2. When an Article 17 request arrives, raw Bronze records are in-place anonymized ($email, iban, ip \mapsto \langle\text{anonymized}\rangle$) to preserve financial ledger row ordering and ledger integrity.
-  3. A global atomic **Suppression Registry** intercepts any replayed or delayed bus events before they reach downstream consumers.
-
----
-
-### Failure Point 2: Ghost Records in Materialized Aggregates (Customer 360 OLAP)
-* **The Failure**: When a customer record is deleted from an upstream transactional database, downstream analytical OLAP tables (`gold.customer_360`, `gold.order_facts`) and cached Parquet files retain historical lifetime spend, order frequency, and marketing flags ("ghost records").
-* **EuroStream's Solution**: **Synchronous Six-Layer Cascading Transaction**:
-  $$\text{Suppression} \longrightarrow \text{Bronze Mask} \longrightarrow \text{Silver Hard DELETE} \longrightarrow \text{Gold Hard DELETE} \longrightarrow \text{Alert State Purge} \longrightarrow \text{Lake Re-export}$$
-  Every Gold aggregate partition is recomputed, and public Parquet lake partitions on Hugging Face Lake are atomically replaced.
-
----
-
-### Failure Point 3: Stream Processing State Leaks (Rolling Window Memory)
-* **The Failure**: Stateful stream processors (e.g., Apache Flink, Spark Streaming) maintain rolling state machines in memory for tumbling/sliding window analytics. Erased customers remain cached in internal memory deques for hours, triggering false fraud alerts or violating Article 5(1)(c) (Data Minimization).
-* **EuroStream's Solution**: [`FraudScorer`](file:///home/swadhin/Article17/src/eurostream/streaming.py#L40-L140) implements **Pre-Scored Suppression Gating**. Before any payment is evaluated for velocity, Z-score, or geo-mismatch, the customer ID is evaluated against `erasure.is_suppressed(cust_id)`. Upon deletion, the customer's state machine deque and alert history are evicted from RAM immediately.
-
----
-
-### Failure Point 4: Distributed State Drift in Ephemeral &amp; Serverless Deployments
-* **The Failure**: In serverless and ephemeral container deployments (e.g., Render, Kubernetes worker pods), in-memory suppression caches and local embedded databases are wiped on container restart, leading to split-brain governance.
-* **EuroStream's Solution**: **Dual-Engine Cloud Persistence**: EuroStream couples a local embedded engine ([DuckDB](https://duckdb.org)) for microsecond analytics with a distributed cloud replica ([Turso libSQL](https://turso.tech)). Every write, incremental merge, watermark advance, and erasure mutation is dual-written and synchronized over HTTP v2 pipelines. On container restart, suppression sets and warehouse state are reconstituted automatically.
-
----
-
-### Failure Point 5: Schema Contract Drift &amp; Uncontrolled PII Column Sprawl
-* **The Failure**: Upstream microservices frequently introduce unclassified PII fields (e.g., `user_ip`, `delivery_notes`) without governance approval, polluting analytical lakes.
-* **EuroStream's Solution**: **Automated PII Classifier + CI Contract Baseline**:
-  1. Automated PII detection with strict **ISO 13616 / ISO 7064 Mod-97 checksum verification** for European IBANs.
-  2. A **CI Contract Baseline Gate** ([`eurostream contracts --baseline governance/contracts.json`](file:///home/swadhin/Article17/src/eurostream/contracts.py#L40-L100)) that blocks any PR introducing unclassified columns or breaking schema changes before merging.
-
----
-
-## 3. End-to-End System Architecture
+### Medallion storage
 
 <p align="center">
-  <img src="assets/endtoendsystem.png" alt="EuroStream End-to-End System Architecture" width="940"/>
+  <img src="assets/medallion-pipeline.png" alt="EuroStream medallion storage and governance pipeline" width="920"/>
 </p>
 
-EuroStream implements a decoupled **Lambda &amp; Medallion Architecture**:
-* **Speed Path (Seconds)**: Real-time fraud anomaly scoring with tumbling windows and sample variance.
-* **Batch Path (Truth)**: Watermarked Medallion transformations (`Bronze` $\to$ `Silver` $\to$ `Gold`) with automated Data Quality Gates.
-* **Durable Event Log**: Zero shared state between speed and batch paths, backed by `SqliteBus` locally (WAL mode with `BEGIN IMMEDIATE` concurrency) or `KafkaBus` in production (Aiven SASL_SSL with SCRAM-SHA-256).
-
-### Medallion Storage Layer Specifications
-
-<p align="center">
-  <img src="assets/medallion-pipeline.png" alt="EuroStream Medallion Governance Pipeline" width="920"/>
-</p>
-
-| Layer | Physical Schema | Governance Policy | Ingestion &amp; Transformation Strategy |
+| Layer | Tables | Storage and governance | Processing |
 |---|---|---|---|
-| **Bronze** | `bronze.orders`<br/>`bronze.clicks`<br/>`bronze.payments`<br/>`bronze.fraud_alerts` | **Raw Capture**: PII retained in clear-text internally; strictly blocked from external lake export. On Art. 17 execution, columns are in-place masked to `<anonymized>`. | High-throughput batch append with `INSERT OR IGNORE` on deterministic `event_id` primary key. |
-| **Silver** | `silver.customers`<br/>`silver.orders`<br/>`silver.payments` | **Cleansed &amp; Pseudonymized**: Natural key deduplication via `row_number()`. All PII hashed with salted SHA-256 ($H(s, x)$). | Incremental watermarked merge (`occurred_at > watermark`), reducing processing compute by ~90%. |
-| **Gold** | `gold.customer_360`<br/>`gold.order_facts`<br/>`gold.fraud_summary` | **Curated &amp; Consent-Gated**: Aggregated customer intelligence. Marketing analytics strictly gated on `bool_and(marketing_consent)`. | Exported to de-identified Parquet lake partitions under `data/lake/` and synchronized to Hugging Face. |
+| Bronze | `bronze.orders`<br/>`bronze.clicks`<br/>`bronze.payments`<br/>`bronze.fraud_alerts` | Raw events remain inside the internal warehouse. Public exports exclude Bronze. An erasure request replaces selected raw PII fields with `<anonymized>`. | Batch append with `INSERT OR IGNORE` and deterministic `event_id` keys. |
+| Silver | `silver.customers`<br/>`silver.orders`<br/>`silver.payments` | Deduplicated with `row_number()` and salted SHA-256 values for configured PII fields. The exported customer identifier remains stable, so these records are pseudonymized rather than anonymous. | Incremental merge using `occurred_at > watermark`. |
+| Gold | `gold.customer_360`<br/>`gold.order_facts`<br/>`gold.fraud_summary` | Curated aggregates combine consent with `bool_and(marketing_consent)`. The quality gate checks that transformations preserve the flag; this repository does not include a downstream marketing-serving filter. | Local Parquet partitions under `data/lake/`, with Hugging Face upload handled separately. |
 
----
+The incremental path reduces repeated work by reading only newer records. No benchmark in this repository measures the incremental compute reduction, so the table does not claim a percentage.
 
-## 4. Real-Time Streaming Fraud Engine
+## Erasure design
 
-<p align="center">
-  <img src="assets/fraudengine.png" alt="EuroStream Streaming Fraud Scoring Flow" width="920"/>
-</p>
+The warehouse erasure workflow updates suppression, audit, Bronze, Silver, and Gold records through independent DuckDB statements. Optional Turso operations and a local lake re-export hook run outside the warehouse transaction. A failure in one external or filesystem step does not roll back the warehouse changes.
 
-The streaming engine processes payment events in real time using a multi-rule anomaly detection pipeline:
-
-1. **Velocity Spike Rule**:
-   Triggers when payment count exceeds threshold $k$ within a sliding window $W$:
-   $$\text{Velocity}(c, W) = \sum_{e \in \text{Payments}(c)} \mathbb{I}(t_{\text{now}} - t_e \le 300\text{s}) > 5$$
-   Alerts fire exactly once per tumbling window to prevent alert flooding.
-
-2. **Amount Z-Score Outlier Rule**:
-   Evaluates transaction amount $x$ against the customer's historical baseline (excluding the current transaction) using sample standard deviation ($N-1$ degrees of freedom):
-   $$\bar{x} = \frac{1}{N}\sum_{i=1}^N x_i, \quad s = \sqrt{\frac{1}{N-1}\sum_{i=1}^N (x_i - \bar{x})^2}$$
-   $$\text{Score}(x) = \frac{|x - \bar{x}|}{s} > 3.0$$
-   State is bounded via an in-memory deque ($N \le 200$) with automated expiration sweeping every 50 events.
-
-3. **Cross-Border Geographic Mismatch Rule**:
-   Detects transactions where issuing bank country differs from merchant destination:
-   $$\text{GeoMismatch}(e) = \mathbb{I}(\text{Country}_{\text{billing}} \ne \text{Country}_{\text{merchant}})$$
-
-4. **Suppression Gating**:
-   Before any rule evaluation, [`FraudStreamProcessor`](file:///home/swadhin/Article17/src/eurostream/streaming.py#L145-L210) verifies suppression registry state. Erased data subjects are immediately dropped with zero memory retention.
-
----
-
-## 5. The Six-Layer GDPR Article 17 Erasure Cascade
+### Storage and runtime boundaries
 
 <p align="center">
-  <img src="assets/six-layer-transaction.png" alt="Six-Layer GDPR Article 17 Erasure Cascade" width="920"/>
+  <img src="assets/failure.png" alt="Five storage and runtime boundaries considered by the EuroStream erasure design" width="920"/>
 </p>
 
-When a Data Subject Access Request (DSAR) right-to-erasure is received, EuroStream executes an atomic, 6-layer transaction:
+#### Append-only event history
+
+Kafka and Kinesis retain payloads in append-only partitions. The local event bus is not purged by an erasure request, and the warehouse suppression set is not a global replay filter for every consumer.
+
+At the Silver boundary, EuroStream computes a deterministic salted hash:
+
+$$
+H(s, x) = \text{SHA256}(s \parallel ": " \parallel x)
+$$
+
+The equation is design notation. The implementation concatenates the salt, a colon, and the source value without adding a space.
+
+During erasure, matching Bronze PII fields are replaced with `<anonymized>` while row order is preserved. The demo can pass `erasure.is_suppressed(cust_id)` to the processor before it scores future payments. The check applies only to a processor instance that receives the callback; existing services do not refresh it automatically.
+
+#### Derived warehouse records
+
+Deleting a customer from a source table does not update Gold aggregates, cached query results, or exported Parquet files. The warehouse workflow deletes matching records from the configured Silver and Gold tables and records the affected layers.
+
+Lake re-export is optional. A local hook can regenerate selected Parquet output, but the erasure transaction does not upload to Hugging Face or atomically replace remote data.
+
+#### Streaming state
+
+The processor can drop future payments for customers present in its suppression snapshot. [`FraudScorer`](file:///home/swadhin/Article17/src/eurostream/streaming.py#L40-L140) keeps history and alert state, but the erasure service does not call an explicit purge method. That state expires during normal processing. The velocity rule uses fixed event-time buckets rather than the sliding-window formula shown in the design material.
+
+#### Ephemeral deployments
+
+Container restarts can clear in-memory state and local files. [DuckDB](https://duckdb.org) and `SqliteBus` provide the local stack, while [Turso libSQL](https://turso.tech) and Kafka provide optional hosted integrations. Turso synchronization does not automatically rebuild the local warehouse after a restart, and remote errors may be logged without stopping the local operation.
+
+#### Schema and PII checks
+
+The contract command compares event models with the committed baseline and blocks breaking contract drift. It does not classify every column in every Bronze table. A separate transform check samples rows for PII and validates configured European IBAN country and length combinations with the Mod-97 checksum.
+
+The gate is implemented in [`eurostream contracts --baseline governance/contracts.json`](file:///home/swadhin/Article17/src/eurostream/contracts.py#L40-L100).
+
+### Six-step request flow
+
+The following diagram describes the intended sequence. The current implementation performs the warehouse steps independently, and the scorer-evacuation item in layer 5 is a design target rather than a wired call.
 
 ```
 [DSAR Intake: POST /erasure-requests] 
@@ -167,8 +183,11 @@ When a Data Subject Access Request (DSAR) right-to-erasure is received, EuroStre
    └──▶ Cryptographic Audit Log Generation: sha256(request_id : customer_id)[0:16]
 ```
 
-### Deletion Verification Protocol
-To prove complete compliance under regulatory scrutiny, EuroStream provides a multi-layer verification endpoint (`GET /verify-erasure/{customer_id}`):
+The API defaults to queueing an erasure request. The queue contains a tombstone and requires a separately started worker. Synchronous execution is available for local workflows.
+
+### Local verification
+
+`GET /verify-erasure/{customer_id}` is a spot check over `gold.customer_360`, `silver.customers`, Bronze orders, and the audit table. It does not inspect Kafka, Turso, Hugging Face, live scorer memory, every Silver or Gold table, or the complete lake. The response includes suppression state, selected row counts, Bronze anonymization counts, and one audit entry.
 
 ```json
 {
@@ -183,28 +202,62 @@ To prove complete compliance under regulatory scrutiny, EuroStream provides a mu
 }
 ```
 
----
+The audit value is a short SHA-256 confirmation digest. It helps correlate a local request with its audit row, but it is not a cryptographic proof that every downstream copy has been deleted.
 
-## 6. Automated Data Quality &amp; ISO 13616 Governance
+## Streaming fraud engine
 
-The [`DataQualityEngine`](file:///home/swadhin/Article17/src/eurostream/quality.py) enforces 6 non-negotiable data integrity and compliance assertions during every DAG run:
+The processor consumes payment events, runs the optional suppression callback, and then evaluates three anomaly rules.
 
-1. `gold.customer_360.customer_id_unique`: Uniqueness assertion on Gold dimension primary key.
-2. `gold.order_facts.order_id_unique`: Uniqueness assertion on fact table primary key.
-3. `silver.customers.email_hash_not_clear`: Guarantees no clear-text email patterns (`@`) exist in Silver.
-4. `silver.customers.iban_hash_not_clear`: Guarantees no clear-text IBAN patterns exist in Silver.
-5. `consent_gating`: Verifies that `consents_marketing` strictly mirrors upstream `marketing_consent`.
-6. `referential_integrity`: Validates that all order fact foreign keys resolve to valid customer dimensions.
+<p align="center">
+  <img src="assets/fraudengine.png" alt="EuroStream streaming fraud scoring flow" width="920"/>
+</p>
 
-### Strict ISO 13616 / ISO 7064 Mod-97 IBAN Validator
-Unlike standard regex-only approaches that incorrectly flag UUIDs as bank account numbers, EuroStream's PII classifier implements full European banking checksum verification:
-$$\text{IBAN Checksum} = \left( \sum_{i=1}^n d_i \cdot 10^{n-i} \right) \bmod 97 = 1$$
+1. Velocity spikes count payments in a fixed event-time bucket. An alert is emitted when the count exceeds the configured threshold:
 
----
+   $$
+   \text{Velocity}(c, W) = \sum_{e \in \text{Payments}(c)} \mathbb{I}(t_{\text{now}} - t_e \le 300\text{s}) > 5
+   $$
 
-## 7. Prometheus Observability &amp; Metrics
+2. Amount z-scores compare a payment with the customer's prior history. The current payment is excluded from the baseline, and the sample standard deviation uses $N-1$ degrees of freedom:
 
-EuroStream exports production Prometheus metrics at `/metrics/prometheus` for Grafana scraping:
+   $$
+   \bar{x} = \frac{1}{N}\sum_{i=1}^N x_i, \quad s = \sqrt{\frac{1}{N-1}\sum_{i=1}^N (x_i - \bar{x})^2}
+   $$
+
+   $$
+   \text{Score}(x) = \frac{|x - \bar{x}|}{s} > 3.0
+   $$
+
+   Each customer history is bounded to 200 values, and old values are swept during normal processing.
+
+3. Geographic mismatches compare the billing country with the merchant country:
+
+   $$
+   \text{GeoMismatch}(e) = \mathbb{I}(\text{Country}_{\text{billing}} \ne \text{Country}_{\text{merchant}})
+   $$
+
+Suppression runs before the rules when the caller supplies a suppression check. A processor with an older suppression snapshot can continue scoring that customer until it receives a refreshed snapshot. The processor implementation is documented in [`FraudStreamProcessor`](file:///home/swadhin/Article17/src/eurostream/streaming.py#L145-L210).
+
+## Data quality and IBAN validation
+
+The [`DataQualityEngine`](file:///home/swadhin/Article17/src/eurostream/quality.py) runs six checks after the medallion transformation:
+
+1. `gold.customer_360.customer_id_unique` checks the Gold dimension key for duplicates.
+2. `gold.order_facts.order_id_unique` checks the fact key for duplicates.
+3. `silver.customers.email_hash_not_clear` samples the Silver customer table for clear-text email patterns (`@`).
+4. `silver.customers.iban_hash_not_clear` samples for clear-text IBAN patterns.
+5. `consent_gating` checks that `consents_marketing` matches the upstream `marketing_consent` value.
+6. `gold.order_facts.customer_id_references_gold.customer_360` checks that Gold order customers resolve to the Gold customer dimension.
+
+The PII classifier uses a fixed table of supported European IBAN country and length combinations. A Mod-97 check reduces false positives from regular-expression matching, but it does not validate every IBAN format in Europe.
+
+$$
+\text{IBAN Checksum} = \left( \sum_{i=1}^n d_i \cdot 10^{n-i} \right) \bmod 97 = 1
+$$
+
+## Observability
+
+FastAPI exposes an in-process, Prometheus-shaped view at `/metrics/prometheus`. It has no persistence and does not emit HELP metadata. The design schema is shown below; the running endpoint is authoritative and currently uses names such as `erasure_requested`, `erasure_sla_breach`, `fraud_alert_velocity`, `fraud_alert_amount_zscore`, `fraud_alert_geo_mismatch`, and `erasure_latency_sum` or `erasure_latency_count`.
 
 ```prometheus
 # HELP erasure_requests_total Total GDPR Art. 17 right-to-erasure requests received
@@ -231,11 +284,11 @@ erasure_latency_seconds_summary_count 42
 erasure_latency_seconds_summary_sum 1.848
 ```
 
----
+The current counters cover requested and completed erasures, SLA breaches, rule-specific fraud alerts, and latency totals. Fetch `/metrics` for the live names and values.
 
-## 8. Empirical Erasure Latency Benchmark
+## Erasure latency benchmark
 
-Run the research benchmark suite to verify sub-minute SLA compliance:
+The benchmark constructs a local DuckDB warehouse and measures direct warehouse execution against the application's 60-second target.
 
 ```bash
 uv run python benchmarks/benchmark_erasure.py
@@ -254,105 +307,75 @@ uv run python benchmarks/benchmark_erasure.py
 =======================================================
 ```
 
----
+In this sample, `Statutory SLA` refers to the application's 60-second target. It is not the statutory GDPR response period. This benchmark does not exercise Turso, the event bus, scorer state, or a Hugging Face upload.
 
-## 9. Quickstart &amp; Usage
+## Deployment
 
-### Prerequisites
-- Python 3.11+
-- [`uv`](https://docs.astral.sh/uv/) package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+The local stack runs without hosted services. Configuration can select optional Kafka, Turso, and Hugging Face integrations, but those integrations have separate failure and recovery behavior.
 
-### 1. Zero-Infrastructure Local Demo
-Run the complete end-to-end simulation (event production $\to$ streaming fraud $\to$ Medallion DAG $\to$ Art. 17 erasure $\to$ automated verification):
-
-```bash
-git clone https://github.com/swadhinbiswas/eurostream.git
-cd eurostream
-uv sync
-uv run eurostream demo
-```
-
-### 2. Individual Pipeline Subcommands
-```bash
-# 1. Produce 500 synthetic EU orders, clicks, and payments onto the bus
-uv run eurostream produce --events 500
-
-# 2. Consume payments and score fraud anomalies in real time
-uv run eurostream stream --max-events 500
-
-# 3. Execute Medallion DAG (Bronze -> Silver -> Gold -> Quality Gates -> Lake Export)
-uv run eurostream transform --incremental
-
-# 4. Probe & sync local warehouse state to Turso cloud database
-uv run eurostream probe-turso
-uv run eurostream sync-turso
-
-# 5. Execute synchronous right-to-erasure for a target customer
-uv run eurostream erase cust_424242
-
-# 6. Verify schema contracts against committed baseline
-uv run eurostream contracts --baseline governance/contracts.json
-```
-
-### 3. Launch Interactive Web UI &amp; REST API
-```bash
-uv run uvicorn eurostream.api:app --reload --port 7860
-```
-Open [http://localhost:7860/](http://localhost:7860/) to access the dashboard:
-- **Overview**: Real-time throughput metrics, marketing consent breakdown, and fraud rule distribution charts.
-- **Fraud Intelligence**: Live anomaly alert stream with rule filters (`VELOCITY`, `GEO_MISMATCH`, `AMOUNT_ZSCORE`).
-- **Medallion &amp; 360**: Searchable Customer 360 table with one-click erasure execution.
-- **GDPR Art. 17 Console**: Live 6-layer deletion cascade visualizer with tamper-evident proof generation.
-- **Prometheus Explorer**: Interactive metric card browser with raw exposition scraper view.
-
----
-
-## 10. Production &amp; Cloud Deployment Matrix
-
-EuroStream is designed with decoupled abstract interfaces, allowing seamless transitions between local zero-cost development and enterprise cloud production without changing application code:
-
-| Component | Local Development Interface | Cloud Production Service | Configuration Key |
+| Component | Local development | Hosted service | Configuration or schedule |
 |---|---|---|---|
-| **Event Bus** | `SqliteBus` (Local SQLite WAL, zero deps) | Aiven Kafka (Managed Kafka, SASL_SSL / SCRAM-256) | `EUROSTREAM_EVENT_BUS_BACKEND=kafka` |
-| **Warehouse** | Embedded `DuckDB` (`data/eurocart.duckdb`) | Turso libSQL Cloud Database (`libsql://...`) | `TURSO_DATABASE_URL` &amp; `TURSO_AUTH_TOKEN` |
-| **Data Lake** | Local Parquet (`data/lake/*.parquet`) | Hugging Face Dataset ([`swadhinbiswas/eustream`](https://huggingface.co/datasets/swadhinbiswas/eustream)) | `EUROSTREAM_HF_REPO` &amp; `HF_TOKEN` |
-| **API &amp; UI** | Uvicorn (`http://localhost:7860`) | Render / Docker Container (`0.0.0.0:PORT`) | `EUROSTREAM_PII_SALT` |
-| **Orchestration** | Local CLI / cron | GitHub Actions Workflow ([`.github/workflows/orchestrate.yml`](.github/workflows/orchestrate.yml)) | Scheduled 4-hour cron DAG |
-| **Documentation** | Astro Starlight (`npm run dev`) | Cloudflare Pages ([`eurostream-docs.pages.dev`](https://eurostream-docs.pages.dev)) | Automated Git push deploy |
+| Event bus | `SqliteBus` with SQLite WAL | Aiven Kafka with SASL_SSL and SCRAM-SHA-256 | `EUROSTREAM_EVENT_BUS_BACKEND=kafka` |
+| Warehouse | Embedded `DuckDB` at `data/eurocart.duckdb` | Optional Turso libSQL synchronization (`libsql://...`) | `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` |
+| Data lake | Local Parquet under `data/lake/*.parquet` | Scheduled Hugging Face upload | `EUROSTREAM_HF_REPO` and `HF_TOKEN` |
+| API and UI | Uvicorn at `http://localhost:7860` | Render or a Docker container on `0.0.0.0:PORT` | `EUROSTREAM_PII_SALT` |
+| Orchestration | Local CLI or cron | GitHub Actions workflow in [`.github/workflows/orchestrate.yml`](.github/workflows/orchestrate.yml) | Scheduled four-hour DAG |
+| Documentation | Astro Starlight with `npm run dev` | Cloudflare Pages | Git push deployment |
 
-### Production Docker Deployment
+### Docker
+
 ```bash
 docker build -t eurostream:latest .
 docker run -d -p 7860:7860 --env-file .env eurostream:latest
 ```
 
----
+The example does not mount `/app/data`, so deleting the container also deletes local warehouse and Parquet files.
 
-## 11. Quality Assurance &amp; Verification Suite
+## Development and quality checks
 
-EuroStream enforces strict type safety, zero-warning linting, and automated contract drift verification:
+Run the same local gate used for the main Python quality checks:
 
 ```bash
 make gate
 ```
 
-The CI gate executes:
-1. **Ruff Linter**: `uv run ruff check src tests` (zero warnings).
-2. **Ruff Formatter**: `uv run ruff format --check src tests` (100% formatted).
-3. **Mypy Strict Typing**: `uv run mypy src/eurostream` (zero type errors across 23 source files).
-4. **Pytest Suite**: `uv run pytest -q` (59 tests verifying IBAN mod-97 math, Z-score bounds, suppression gates, erasure cascade integrity, watermark advances, and poison-pill safety).
-5. **Schema Contract Drift Gate**: `uv run eurostream contracts --baseline governance/contracts.json`.
+The gate runs:
 
----
+1. Ruff lint: `uv run ruff check src tests`.
+2. Ruff formatting: `uv run ruff format --check src tests`.
+3. Strict mypy for `src/eurostream`: `uv run mypy src/eurostream`, with missing third-party imports ignored by the project configuration.
+4. Pytest: `uv run pytest -q`, with 77 tests covering the local runtime and static Databricks notebook and query contracts.
+5. Event contract drift: `uv run eurostream contracts --baseline governance/contracts.json`.
 
-## 12. Research Paper &amp; Academic Citation
+The Python gate does not run the separate TypeScript checks for the Databricks application.
 
-EuroStream is prepared as an open-source research software submission for the **Journal of Open Source Software (JOSS)**.
+## Databricks implementation
 
-- **Full Paper**: [`paper/paper.md`](paper/paper.md)
-- **BibTeX Bibliography**: [`paper/paper.bib`](paper/paper.bib)
+The repository includes a separate Databricks implementation under [`databricks/`](databricks/README.md). It runs independently from the local Python, DuckDB, and GitHub Actions stack.
 
-If you use EuroStream in academic, regulatory, or industrial data engineering research, please cite:
+| Capability | Databricks implementation |
+|---|---|
+| Ingestion and transforms | Lakeflow Declarative Pipelines with Unity Catalog Delta tables |
+| Streaming work | Continuous Lakeflow Job for fraud processing |
+| Orchestration | Lakeflow Jobs, task dependencies, parameters, schedules, and Run Now |
+| Governance | UC grants, tags, masks, suppression, quality gates, and fail-closed erasure evidence |
+| Application | Custom React and TypeScript application built with Databricks AppKit in [`databricks/app/`](databricks/app/README.md) |
+| Automation | Optional Declarative Automation Bundle; the primary walkthrough uses the Databricks UI |
+
+<p align="center">
+  <img src="databricks/assets/databricks-pipeline.svg" alt="Standalone Databricks EuroStream architecture" width="1100"/>
+</p>
+
+The environment-specific operator guide in `docs/databricks/` is excluded from Git. The checked-in showcase covers the data model, pipeline code, workflow notebooks, governance controls, and application without changing the local runtime.
+
+## Research paper and citation
+
+The repository includes a research software paper prepared for the Journal of Open Source Software (JOSS).
+
+- [Full paper](paper/paper.md)
+- [BibTeX bibliography](paper/paper.bib)
+
+If you use EuroStream in academic, regulatory, or industrial data engineering research, cite it as:
 
 ```bibtex
 @article{Biswas2026EuroStream,
@@ -368,8 +391,6 @@ If you use EuroStream in academic, regulatory, or industrial data engineering re
 }
 ```
 
----
+## License
 
-## 13. License
-
-This project is licensed under the [MIT License](LICENSE) — free for academic, commercial, and research use.
+This project is available under the [MIT License](LICENSE) for academic, commercial, and research use.

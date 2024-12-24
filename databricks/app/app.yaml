@@ -1,0 +1,18 @@
+command:
+  - npm
+  - run
+  - start
+
+env:
+  - name: NODE_ENV
+    value: production
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse
+  - name: DATABRICKS_JOB_ID
+    valueFrom: erasure-job
+  - name: EUROSTREAM_PREVIEW_SECRET
+    valueFrom: preview-secret
+  - name: EUROSTREAM_PREVIEW_TTL_SECONDS
+    value: '600'
+  - name: EUROSTREAM_INTERNAL_SLO_SECONDS
+    value: '60'

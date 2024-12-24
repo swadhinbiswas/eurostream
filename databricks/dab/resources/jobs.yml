@@ -1,0 +1,410 @@
+# Lakeflow Jobs resources.
+#
+# Serverless is used for bounded notebook/pipeline tasks.  The fraud notebook
+# is the exception: it uses a time-based Structured Streaming trigger and
+# awaitTermination(), so it is represented as a long-lived classic Jobs
+# compute run rather than incorrectly claiming Serverless continuous support.
+
+resources:
+  jobs:
+    # ------------------------------------------------------------------
+    # Bronze is wrapped by a continuous Lakeflow Job.  The pipeline itself
+    # remains triggered; current Lakeflow guidance gives the continuous Job
+    # precedence and supports serverless Standard performance mode.
+    # ------------------------------------------------------------------
+    eurostream_bronze_continuous:
+      name: eurostream_bronze_continuous
+      description: Continuous Job wrapper for the REPLACE USING Bronze pipeline.
+      performance_target: STANDARD
+      continuous:
+        pause_status: PAUSED
+        task_retry_mode: ON_FAILURE
+      max_concurrent_runs: 1
+      email_notifications:
+        on_failure:
+          - ${var.on_call_email}
+      tasks:
+        - task_key: bronze_ingest
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.eurostream_bronze.id}
+      run_as:
+        group_name: ${var.pipeline_run_as_group}
+      permissions:
+        - level: CAN_VIEW
+          group_name: eurostream_dpo_operators
+        - level: CAN_MANAGE
+          group_name: eurostream_platform_admins
+
+    # ------------------------------------------------------------------
+    # The fraud Job's notebook owns the idempotent sink bootstrap before it
+    # reads Kafka. The medallion Job assumes that reviewed sink exists and
+    # sequences Silver/Gold without executing bootstrap DDL.
+    # ------------------------------------------------------------------
+    eurostream_fraud_stream:
+      name: eurostream_fraud_continuous
+      description: Long-lived classic Jobs compute for the fraud Structured Streaming notebook.
+      max_concurrent_runs: 1
+      timeout_seconds: 0
+      parameters:
+        - name: kafka_topic
+          default: payments
+        - name: checkpoint
+          default: /Volumes/eurostream/bronze/_checkpoints/fraud_stream
+        - name: trigger_seconds
+          default: "10"
+        - name: suppression_table
+          default: eurostream.governance.suppression_registry
+        - name: alert_table
+          default: eurostream.bronze.fraud_alerts
+        - name: zscore_state_ttl_seconds
+          default: "86400"
+        - name: bootstrap_only
+          default: "false"
+      email_notifications:
+        on_failure:
+          - ${var.on_call_email}
+      tasks:
+        - task_key: score_payments
+          notebook_task:
+            notebook_path: ../notebooks/03_fraud_streaming.py
+            source: WORKSPACE
+          new_cluster:
+            spark_version: ${var.fraud_spark_version}
+            node_type_id: ${var.fraud_node_type_id}
+            num_workers: 2
+            data_security_mode: SINGLE_USER
+            spark_conf:
+              eurostream.kafka.bootstrap: ${var.kafka_bootstrap}
+              eurostream.kafka.secret_scope: ${var.runtime_secret_scope}
+          max_retries: 1
+          min_retry_interval_millis: 10000
+          retry_on_timeout: false
+      run_as:
+        group_name: ${var.fraud_run_as_group}
+      permissions:
+        - level: CAN_VIEW
+          group_name: eurostream_dpo_operators
+        - level: CAN_MANAGE
+          group_name: eurostream_platform_admins
+
+    # ------------------------------------------------------------------
+    # Batch medallion refresh.  Bronze is already owned by the continuous
+    # Job above; this graph sequences the pipeline-owned Silver and Gold
+    # targets and requires the fraud-owned sink to have been bootstrapped by
+    # the fraud notebook/manual prerequisite before Gold reads it.
+    # ------------------------------------------------------------------
+    eurostream_medallion_refresh:
+      name: eurostream_medallion_refresh
+      description: Trigger Silver then Gold after the continuous Bronze stream has produced data.
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+      email_notifications:
+        on_failure:
+          - ${var.on_call_email}
+      tasks:
+        - task_key: silver_transform
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.eurostream_silver.id}
+          max_retries: 1
+          min_retry_interval_millis: 10000
+
+        - task_key: gold_aggregate
+          depends_on:
+            - task_key: silver_transform
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.eurostream_gold.id}
+          max_retries: 1
+          min_retry_interval_millis: 10000
+      run_as:
+        group_name: ${var.job_run_as_group}
+      permissions:
+        - level: CAN_VIEW
+          group_name: eurostream_dpo_operators
+        - level: CAN_MANAGE
+          group_name: eurostream_platform_admins
+
+    # ------------------------------------------------------------------
+    # Quality gate.  Job-level parameters are intentional: current Bundles
+    # reject a job that mixes job parameters with task base_parameters.
+    # ------------------------------------------------------------------
+    eurostream_quality_gate:
+      name: eurostream_quality_gate
+      description: Run all six governance assertions and fail closed on any violation.
+      performance_target: PERFORMANCE_OPTIMIZED
+      max_concurrent_runs: 1
+      timeout_seconds: 1800
+      parameters:
+        - name: fail_on_error
+          default: "true"
+        - name: run_id
+          default: "{{job.run_id}}"
+      email_notifications:
+        on_failure:
+          - ${var.on_call_email}
+      tasks:
+        - task_key: quality_gates
+          notebook_task:
+            notebook_path: ../notebooks/01_quality_gates.py
+            source: WORKSPACE
+          max_retries: 1
+          min_retry_interval_millis: 10000
+      run_as:
+        group_name: ${var.job_run_as_group}
+      permissions:
+        - level: CAN_VIEW
+          group_name: eurostream_dpo_operators
+        - level: CAN_MANAGE
+          group_name: eurostream_platform_admins
+
+    # ------------------------------------------------------------------
+    # Governed export is a separate Job so the orchestrator and operators can
+    # run/retry it without changing the medallion graph.
+    # ------------------------------------------------------------------
+    eurostream_export_lake:
+      name: eurostream_export_lake
+      description: Rebuild and verify the restricted pseudonymized Silver/Gold Volume export.
+      performance_target: PERFORMANCE_OPTIMIZED
+      max_concurrent_runs: 1
+      timeout_seconds: 1800
+      parameters:
+        - name: sync_huggingface
+          default: "false"
+        - name: silver_gold_refresh_run_id
+          default: "{{job.run_id}}"
+      email_notifications:
+        on_failure:
+          - ${var.on_call_email}
+      tasks:
+        - task_key: export_lake
+          notebook_task:
+            notebook_path: ../notebooks/04_export_lake.py
+            source: WORKSPACE
+          max_retries: 1
+          min_retry_interval_millis: 10000
+      run_as:
+        group_name: ${var.job_run_as_group}
+      permissions:
+        - level: CAN_VIEW
+          group_name: eurostream_dpo_operators
+        - level: CAN_MANAGE
+          group_name: eurostream_platform_admins
+
+    # ------------------------------------------------------------------
+    # App-facing Article 17 entry point. The monolithic execute mode is not
+    # wired here; the graph below makes the required synchronous boundaries
+    # explicit:
+    #   suppression/mask -> Silver refresh -> Gold refresh -> fail-closed refresh
+    #   barrier -> export -> fraud-sink cleanup and current/export verification
+    # ------------------------------------------------------------------
+    eurostream_art17_erasure:
+      name: eurostream_art17_erasure
+      description: Fail-closed Article 17 orchestration with Lakeflow-owned Silver/Gold refreshes.
+      performance_target: PERFORMANCE_OPTIMIZED
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+      parameters:
+        - name: customer_id
+          default: ""
+        - name: ticket_id
+          default: manual
+        - name: request_id
+          default: ""
+        - name: idempotency_key
+          default: ""
+        - name: requested_by
+          default: ""
+        - name: reason
+          default: GDPR_ARTICLE_17
+        - name: actor
+          default: databricks_workflow
+        - name: workflow_run_id
+          default: "{{job.run_id}}"
+        - name: internal_slo_seconds
+          default: ${var.erasure_internal_slo_seconds}
+        - name: sla_seconds
+          default: ${var.erasure_internal_slo_seconds}
+        - name: confirm_quiesced_physical_cleanup
+          default: "false"
+        - name: failure_stage
+          default: orchestration_failure
+      email_notifications:
+        on_failure:
+          - ${var.on_call_email}
+      notification_settings:
+        no_alert_for_skipped_runs: true
+        no_alert_for_canceled_runs: false
+      tasks:
+        - task_key: suppression_mask
+          description: Insert suppression, mask Bronze PII, and clean Bronze quarantine/fraud rows.
+          notebook_task:
+            notebook_path: notebooks/erasure_suppression_mask.py
+            source: WORKSPACE
+          timeout_seconds: 600
+          max_retries: 0
+          retry_on_timeout: false
+
+        - task_key: refresh_silver
+          depends_on:
+            - task_key: suppression_mask
+          description: Refresh Silver materialized views from the post-mask Bronze snapshot.
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.eurostream_silver.id}
+            full_refresh: true
+          timeout_seconds: 900
+          max_retries: 0
+          retry_on_timeout: false
+
+        - task_key: refresh_gold
+          depends_on:
+            - task_key: refresh_silver
+          description: Refresh Gold materialized views from refreshed Silver relations.
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.eurostream_gold.id}
+            full_refresh: true
+          timeout_seconds: 900
+          max_retries: 0
+          retry_on_timeout: false
+
+        - task_key: verify_refresh_barrier
+          depends_on:
+            - task_key: refresh_gold
+          description: Verify Bronze logical state and every refreshed Silver/Gold target before export.
+          notebook_task:
+            notebook_path: notebooks/erasure_refresh_verify.py
+            source: WORKSPACE
+          timeout_seconds: 600
+          max_retries: 0
+          retry_on_timeout: false
+
+        - task_key: export_lake
+          depends_on:
+            - task_key: verify_refresh_barrier
+          description: Rebuild the governed Silver/Gold export after both materialized views refresh.
+          run_job_task:
+            job_id: ${resources.jobs.eurostream_export_lake.id}
+            job_parameters:
+              sync_huggingface: "false"
+              silver_gold_refresh_run_id: "{{job.run_id}}"
+          timeout_seconds: 1800
+          max_retries: 0
+          retry_on_timeout: false
+
+        - task_key: verify_export_cleanup
+          depends_on:
+            - task_key: export_lake
+          description: Verify current views/export and physically clean only the job-owned fraud sink.
+          notebook_task:
+            notebook_path: notebooks/erasure_physical_cleanup.py
+            source: WORKSPACE
+          timeout_seconds: 1800
+          max_retries: 0
+          retry_on_timeout: false
+
+        - task_key: on_failure_record
+          description: Record a durable failed state without mutating showcase data.
+          depends_on:
+            - task_key: suppression_mask
+            - task_key: refresh_silver
+            - task_key: refresh_gold
+            - task_key: verify_refresh_barrier
+            - task_key: export_lake
+            - task_key: verify_export_cleanup
+          run_if: AT_LEAST_ONE_FAILED
+          notebook_task:
+            notebook_path: notebooks/erasure_failure_record.py
+            source: WORKSPACE
+          timeout_seconds: 300
+          max_retries: 0
+          retry_on_timeout: false
+      run_as:
+        group_name: ${var.erasure_run_as_group}
+      permissions:
+        - level: CAN_VIEW
+          group_name: eurostream_dpo_operators
+        - level: CAN_MANAGE
+          group_name: eurostream_platform_admins
+
+    # The monolithic notebook is intentionally not a DAB task. Its prepare /
+    # verify modes are useful for manual review, while the DAB-local stages make
+    # every dependency and the fraud-sink-only physical scope explicit.
+
+    eurostream_erasure_benchmark:
+      name: eurostream_erasure_benchmark
+      description: Measure the direct suppression/masking preparation path against the internal SLO.
+      performance_target: PERFORMANCE_OPTIMIZED
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+      parameters:
+        - name: iterations
+          default: "50"
+        - name: internal_slo_seconds
+          default: ${var.erasure_internal_slo_seconds}
+        - name: sla_seconds
+          default: ${var.erasure_internal_slo_seconds}
+        - name: run_id
+          default: "{{job.run_id}}"
+      email_notifications:
+        on_failure:
+          - ${var.on_call_email}
+      tasks:
+        - task_key: benchmark
+          notebook_task:
+            notebook_path: ../notebooks/05_benchmark_erasure.py
+            source: WORKSPACE
+          max_retries: 0
+          retry_on_timeout: false
+      run_as:
+        group_name: ${var.erasure_run_as_group}
+      permissions:
+        - level: CAN_VIEW
+          group_name: eurostream_dpo_operators
+        - level: CAN_MANAGE
+          group_name: eurostream_platform_admins
+
+    # ------------------------------------------------------------------
+    # Four-hour parent DAG.  Cross-pipeline ordering is expressed with
+    # run_job_task, not the removed/ambiguous job_task key.
+    # ------------------------------------------------------------------
+    eurostream_orchestrator:
+      name: eurostream_orchestrator
+      description: Four-hour medallion -> quality -> governed export DAG.
+      max_concurrent_runs: 1
+      timeout_seconds: 14400
+      schedule:
+        quartz_cron_expression: "0 0 */4 * * ?"
+        timezone_id: Europe/Berlin
+        pause_status: PAUSED
+      email_notifications:
+        on_failure:
+          - ${var.on_call_email}
+      health:
+        rules:
+          - metric: RUN_DURATION_SECONDS
+            op: GREATER_THAN
+            value: 3600
+      tasks:
+        - task_key: medallion
+          run_job_task:
+            job_id: ${resources.jobs.eurostream_medallion_refresh.id}
+
+        - task_key: quality
+          depends_on:
+            - task_key: medallion
+          run_job_task:
+            job_id: ${resources.jobs.eurostream_quality_gate.id}
+
+        - task_key: export_lake
+          depends_on:
+            - task_key: quality
+          run_job_task:
+            job_id: ${resources.jobs.eurostream_export_lake.id}
+            job_parameters:
+              sync_huggingface: "false"
+              silver_gold_refresh_run_id: "{{job.run_id}}"
+      run_as:
+        group_name: ${var.job_run_as_group}
+      permissions:
+        - level: CAN_VIEW
+          group_name: eurostream_dpo_operators
+        - level: CAN_MANAGE
+          group_name: eurostream_platform_admins
