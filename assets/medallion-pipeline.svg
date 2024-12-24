@@ -1,0 +1,129 @@
+<svg width="920" height="380" viewBox="0 0 920 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+<title id="title">EuroStream — Medallion Governance &amp; Incremental Pipeline</title>
+<desc id="desc">Detailed view of Bronze ingestion, Silver salted SHA-256 deduplication, Gold Customer 360 aggregate curation, and Data Quality Gate validation</desc>
+<defs>
+  <linearGradient id="grad-brz" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#b45309"/></linearGradient>
+  <linearGradient id="grad-slv" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#818cf8"/><stop offset="100%" stop-color="#4f46e5"/></linearGradient>
+  <linearGradient id="grad-gld" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#10b981"/><stop offset="100%" stop-color="#047857"/></linearGradient>
+  <linearGradient id="grad-gate" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#0284c7"/></linearGradient>
+  <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.12"/></filter>
+  <style>
+    .bg { fill: #0b0f19; }
+    .card { fill: #111827; stroke: #1e293b; stroke-width: 1.2; rx: 10px; }
+    .title { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; font-size: 11px; font-weight: 700; fill: #f8fafc; }
+    .sub { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; font-size: 9.5px; fill: #94a3b8; }
+    .code { font-family: 'JetBrains Mono', monospace; font-size: 8.5px; }
+    .flow-line { fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-dasharray: 6 6; animation: dash 1.3s linear infinite; }
+    @keyframes dash { to { stroke-dashoffset: -12; } }
+  </style>
+</defs>
+
+<rect width="920" height="380" rx="16" class="bg"/>
+
+<!-- Title -->
+<g transform="translate(30, 22)">
+  <text x="0" y="18" style="font-family: 'Inter', sans-serif; font-size: 15px; font-weight: 800; fill: #f8fafc;">MEDALLION GOVERNANCE &amp; INCREMENTAL COMPUTATION</text>
+  <text x="0" y="34" style="font-family: 'Inter', sans-serif; font-size: 10.5px; fill: #94a3b8;">Watermarked incremental merge with salted SHA-256 pseudonymization and automated DAG quality gates</text>
+</g>
+
+<!-- 1. BRONZE LAYER -->
+<g transform="translate(30, 75)" filter="url(#shadow)">
+  <rect width="260" height="210" class="card"/>
+  <rect width="260" height="3" rx="1.5" fill="url(#grad-brz)"/>
+  <text x="130" y="24" text-anchor="middle" class="title">BRONZE · RAW APPEND LOG</text>
+  <text x="130" y="38" text-anchor="middle" class="sub">Immutable Event Capture Layer</text>
+  
+  <g transform="translate(14, 52)">
+    <rect width="232" height="32" rx="5" fill="#1e293b"/>
+    <text x="10" y="14" class="code" fill="#f59e0b">bronze.orders</text>
+    <text x="10" y="25" class="code" fill="#94a3b8">event_id, order_id, email, iban, ...</text>
+  </g>
+  <g transform="translate(14, 90)">
+    <rect width="232" height="32" rx="5" fill="#1e293b"/>
+    <text x="10" y="14" class="code" fill="#f59e0b">bronze.payments</text>
+    <text x="10" y="25" class="code" fill="#94a3b8">payment_id, amount_eur, iban, ...</text>
+  </g>
+  <g transform="translate(14, 128)">
+    <rect width="232" height="32" rx="5" fill="#1e293b"/>
+    <text x="10" y="14" class="code" fill="#f59e0b">bronze.clicks &amp; fraud_alerts</text>
+    <text x="10" y="25" class="code" fill="#94a3b8">click_id, ip_address, rule, severity</text>
+  </g>
+  <g transform="translate(14, 168)">
+    <text x="0" y="12" class="code" fill="#64748b">Policy: Clear-text PII strictly internal</text>
+    <text x="0" y="24" class="code" fill="#ef4444">Masked to &lt;anonymized&gt; on Art. 17</text>
+  </g>
+</g>
+
+<!-- 2. SILVER LAYER -->
+<g transform="translate(330, 75)" filter="url(#shadow)">
+  <rect width="260" height="210" class="card"/>
+  <rect width="260" height="3" rx="1.5" fill="url(#grad-slv)"/>
+  <text x="130" y="24" text-anchor="middle" class="title">SILVER · CLEANSED &amp; PSEUDONYMIZED</text>
+  <text x="130" y="38" text-anchor="middle" class="sub">Watermarked Deduplication (MERGE)</text>
+  
+  <g transform="translate(14, 52)">
+    <rect width="232" height="32" rx="5" fill="#1e293b"/>
+    <text x="10" y="14" class="code" fill="#818cf8">silver.customers</text>
+    <text x="10" y="25" class="code" fill="#94a3b8">sha256(salt:email), sha256(salt:iban)</text>
+  </g>
+  <g transform="translate(14, 90)">
+    <rect width="232" height="32" rx="5" fill="#1e293b"/>
+    <text x="10" y="14" class="code" fill="#818cf8">silver.orders</text>
+    <text x="10" y="25" class="code" fill="#94a3b8">Deduplicated on order_id (latest wins)</text>
+  </g>
+  <g transform="translate(14, 128)">
+    <rect width="232" height="32" rx="5" fill="#1e293b"/>
+    <text x="10" y="14" class="code" fill="#818cf8">silver.payments</text>
+    <text x="10" y="25" class="code" fill="#94a3b8">Deduplicated on payment_id</text>
+  </g>
+  <g transform="translate(14, 168)">
+    <text x="0" y="12" class="code" fill="#38bdf8">Watermark: max(occurred_at)</text>
+    <text x="0" y="24" class="code" fill="#818cf8">Deterministic Hash: Python ≡ SQL</text>
+  </g>
+</g>
+
+<!-- 3. GOLD LAYER -->
+<g transform="translate(630, 75)" filter="url(#shadow)">
+  <rect width="260" height="210" class="card"/>
+  <rect width="260" height="3" rx="1.5" fill="url(#grad-gld)"/>
+  <text x="130" y="24" text-anchor="middle" class="title">GOLD · BUSINESS AGGREGATES</text>
+  <text x="130" y="38" text-anchor="middle" class="sub">Consent-Gated Analytics &amp; Lake</text>
+  
+  <g transform="translate(14, 52)">
+    <rect width="232" height="32" rx="5" fill="#1e293b"/>
+    <text x="10" y="14" class="code" fill="#34d399">gold.customer_360</text>
+    <text x="10" y="25" class="code" fill="#94a3b8">total_spend, avg_order, fraud_flag</text>
+  </g>
+  <g transform="translate(14, 90)">
+    <rect width="232" height="32" rx="5" fill="#1e293b"/>
+    <text x="10" y="14" class="code" fill="#34d399">gold.order_facts</text>
+    <text x="10" y="25" class="code" fill="#94a3b8">Aggregated facts by country/date</text>
+  </g>
+  <g transform="translate(14, 128)">
+    <rect width="232" height="32" rx="5" fill="#1e293b"/>
+    <text x="10" y="14" class="code" fill="#34d399">gold.fraud_summary</text>
+    <text x="10" y="25" class="code" fill="#94a3b8">Aggregated rule triggers per customer</text>
+  </g>
+  <g transform="translate(14, 168)">
+    <text x="0" y="12" class="code" fill="#34d399">Art. 6 Consent: bool_and(marketing)</text>
+    <text x="0" y="24" class="code" fill="#34d399">Export: 6 Parquet files to Hugging Face</text>
+  </g>
+</g>
+
+<!-- 4. DATA QUALITY GATES BAR -->
+<g transform="translate(30, 300)" filter="url(#shadow)">
+  <rect width="860" height="60" class="card"/>
+  <rect width="860" height="3" rx="1.5" fill="url(#grad-gate)"/>
+  <text x="20" y="22" class="title" fill="#38bdf8">AUTOMATED DATA QUALITY ENGINE (DAG GATES)</text>
+  <text x="20" y="38" class="code" fill="#94a3b8">1. customer_id_unique · 2. order_id_unique · 3. email_hash_not_clear · 4. iban_hash_not_clear · 5. consent_gating · 6. referential_integrity</text>
+  <g transform="translate(730, 16)">
+    <rect width="115" height="26" rx="5" fill="#047857"/>
+    <text x="57.5" y="17" text-anchor="middle" class="code" fill="#f8fafc" font-weight="700">DAG GATE: 6/6 PASS</text>
+  </g>
+</g>
+
+<!-- Connectors -->
+<path d="M 290 180 L 330 180" class="flow-line" stroke="#818cf8"/>
+<path d="M 590 180 L 630 180" class="flow-line" stroke="#34d399"/>
+
+</svg>
