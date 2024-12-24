@@ -33,3 +33,10 @@ site/.astro/
 
 # Personal interview notes — never committed
 notes/
+
+# IDE / Editor
+mimocode/
+.mimocode/
+mimocode
+.mimocode
+
