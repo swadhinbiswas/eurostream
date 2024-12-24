@@ -169,6 +169,24 @@ def transform(
     settings, bus, warehouse, metrics, classifier = _fresh()
     lineage = LineageEmitter(settings.data_dir / "lineage.jsonl")
 
+    def ingest_bronze() -> None:
+        lineage.start(
+            "ingest_bronze",
+            inputs=["bus.orders", "bus.clicks", "bus.payments"],
+            outputs=["bronze.orders", "bronze.clicks", "bronze.payments"],
+        )
+        loaded = {}
+        for topic in ("orders", "clicks", "payments"):
+            consumer = bus.consumer(topic, "bronze-ingester", auto_offset_reset="earliest")
+            records = _drain(consumer)
+            if records:
+                warehouse.load_bronze_from_records(topic, records)
+                consumer.commit()
+            loaded[topic] = len(records)
+            consumer.close()
+        lineage.complete("ingest_bronze", extra=loaded)
+        typer.echo(f"  bronze ingested: {loaded}")
+
     def pii_scan() -> None:
         rows = warehouse.bronze_rows("orders", 200)
         for r in rows:
@@ -229,7 +247,8 @@ def transform(
     dag = DAG(
         dag_id="medallion",
         tasks=[
-            DAGTask("pii_scan", pii_scan, depends_on=[]),
+            DAGTask("ingest_bronze", ingest_bronze, depends_on=[]),
+            DAGTask("pii_scan", pii_scan, depends_on=["ingest_bronze"]),
             DAGTask("build_silver", build_silver, depends_on=["pii_scan"]),
             DAGTask("build_gold", build_gold, depends_on=["build_silver"]),
             DAGTask("quality_gate", quality_gate, depends_on=["build_gold"]),
@@ -404,13 +423,20 @@ def demo() -> None:
     metrics.flush()
 
 
-def _drain(consumer: Consumer) -> list[Record]:
+def _drain(consumer: Consumer, max_records: int | None = None) -> list[Record]:
     records: list[Record] = []
+    consecutive_empty = 0
     while True:
-        rec = consumer.poll(0.05)
+        rec = consumer.poll(0.1)
         if rec is None:
-            break
-        records.append(rec)
+            consecutive_empty += 1
+            if consecutive_empty >= 2:
+                break
+        else:
+            consecutive_empty = 0
+            records.append(rec)
+            if max_records and len(records) >= max_records:
+                break
     return records
 
 
