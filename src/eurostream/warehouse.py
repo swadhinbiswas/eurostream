@@ -119,7 +119,10 @@ class Warehouse:
         turso_token = os.getenv("TURSO_AUTH_TOKEN")
         if turso_url and turso_token:
             try:
-                import libsql_experimental as libsql  # type: ignore[import-not-found]
+                try:
+                    import libsql  # type: ignore[import-not-found]
+                except ImportError:
+                    import libsql_experimental as libsql  # type: ignore[import-not-found]
                 self.turso = libsql.connect(database=turso_url, authToken=turso_token)
                 # Mirror schema to Turso (SQLite dialect, best-effort)
                 for ddl in (CREATE_BRONZE, CREATE_SILVER, CREATE_GOLD, CREATE_GOVERNANCE):

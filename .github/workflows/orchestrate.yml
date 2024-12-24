@@ -15,6 +15,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      - name: Restore warehouse cache (so lake stays cumulative without Turso)
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/eurocart.duckdb
+            data/events.db
+            governance/pii_manifest.json
+          key: eurostream-warehouse-${{ hashFiles('governance/pii_manifest.json') }}
+          restore-keys: eurostream-warehouse-
       - run: uv sync
       - name: Probe Kafka or fallback
         id: probe
