@@ -1,0 +1,84 @@
+---
+title: "API Reference — FastAPI Governance Endpoints"
+description: "HTTP API reference for the EuroStream governance service — erasure request intake, health with suppressed customer IDs, metrics snapshots, audit log queries and consent-aware Customer 360 reads."
+sidebar:
+  order: 2
+---
+
+The governance API is a FastAPI app (`src/eurostream/api.py`). Run it with:
+
+```bash
+uv run uvicorn eurostream.api:app --reload
+# or the container image:
+docker run -p 8000:8000 eurostream
+```
+
+## Endpoints
+
+### `POST /erasure-requests`
+
+Accepts a GDPR Article 17 request and enqueues a tombstone on the bus.
+Execution is asynchronous via the worker.
+
+```bash
+curl -X POST http://localhost:8000/erasure-requests \
+  -H 'Content-Type: application/json' \
+  -d '{"customer_id": "cust_424242"}'
+```
+
+```json
+{
+  "request_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "customer_id": "cust_424242",
+  "status": "queued",
+  "sla_seconds": 60
+}
+```
+
+Request body validation: `customer_id` requires ≥3 characters; `reason`
+defaults to `"GDPR_ARTICLE_17"`.
+
+### `GET /health`
+
+Liveness plus the current suppression registry snapshot:
+
+```json
+{ "status": "ok", "suppressed": ["cust_424242"] }
+```
+
+### `GET /metrics`
+
+Prometheus-shaped snapshot — counters, gauges, histogram summaries
+(count/sum/max):
+
+```json
+{
+  "counters": { "fraud_alert_velocity": 1, "erasure_requested": 1 },
+  "histograms": {
+    "erasure_latency": { "count": 1, "sum": 0.068, "max": 0.068 }
+  }
+}
+```
+
+### `GET /governance/erasure-audit`
+
+Audit rows newest-first, straight from `governance.erasure_audit_log`.
+
+### `GET /gold/customer-360?limit=100`
+
+Reads the consent-aware Gold view. The `limit` parameter is cast to `int`
+before interpolation (the one dynamic identifier in a read path).
+
+## Wiring
+
+`bootstrap()` constructs the local stack: bus, warehouse, metrics, erasure
+service (with the lake re-snapshot completion hook). Tests and alternative
+deployments inject their own components through `create_app(erasure, metrics,
+settings, warehouse)`.
+
+## Production hardening checklist
+
+- [ ] Terminate auth at your gateway/SSO before exposing `/erasure-requests`
+- [ ] Rate-limit erasure intake (it fans out work)
+- [ ] Ship `data/logs/erasure_audit.jsonl` to WORM storage
+- [ ] Scrape `/metrics` from Prometheus instead of polling JSONL

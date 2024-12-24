@@ -1,0 +1,95 @@
+---
+title: "Recipe 6 — Schema Contracts Enforced in CI: Blocking Breaking Drift Before Consumers Break"
+description: "Turn pydantic event models into a schema registry with a committed JSON baseline and a CI drift guard that fails on removed required fields, required-to-optional changes and type changes — while allowing additive evolution."
+sidebar:
+  order: 7
+---
+
+## Problem
+
+Events are contracts. When a producer removes a field or changes `int` to
+`str`, the failure doesn't appear in the producer's repo — it appears in
+*consumers*, days later, as runtime crashes. The fix is a **registry with an
+enforced compatibility policy**, like Confluent Schema Registry provides for
+Avro — implemented here in ~140 lines of Python.
+
+## Why this way
+
+| Option | Verdict |
+|---|---|
+| "Be careful" + code review | Not a control; humans miss types |
+| JSON Schema files maintained by hand | Drifts from the actual models instantly |
+| **Snapshot pydantic models → committed baseline → CI check** | ✅ Single source of truth is the code itself |
+
+## The recipe
+
+### 1. Snapshot the models
+
+```python
+def _spec(self, model: type[Event]) -> dict[str, FieldSpec]:
+    specs = {}
+    for name, field_info in model.model_fields.items():
+        required = field_info.is_required()
+        annotation = field_info.annotation
+        if annotation is not None:
+            # Prefer the declared annotation: it carries the full contract
+            # (Literal discriminators, Optional unions) unlike the default.
+            type_str = _resolve_type(annotation)
+        else:
+            default = field_info.default
+            type_str = _resolve_type(type(default)) if default is not None else "required"
+        specs[name] = FieldSpec(name=name, type=type_str, required=required)
+    return specs
+```
+
+`_resolve_type` renders precise types — `str`, `float`,
+`Literal['order_placed']`, unions for optionals. Precision matters: the
+discriminator literal *is* the topic's identity.
+
+A real lesson from development: the first serializer resolved
+`type(PydanticUndefined)` for required fields and produced nonsense strings.
+The baseline was *technically consistent*, so nothing failed — until a
+rewrite of `_resolve_type` exposed 30 phantom "breaking changes". **A
+contract file nobody can regenerate is a liability**; the snapshot must be
+reproducible from code alone.
+
+### 2. The compatibility policy
+
+```python
+if spec is None:
+    if old.required:
+        violations.append(...("required field removed"))
+elif old.required and not spec.required:
+    violations.append(...("required field became optional"))
+elif old.required and spec.required and old.type != spec.type:
+    violations.append(...(f"type changed {old.type} -> {spec.type}"))
+```
+
+Breaking (fails CI): removing required fields, required → optional,
+type changes on required fields.
+Allowed: adding optional fields, adding topics — producers can evolve.
+
+### 3. Wire it into CI
+
+```bash
+uv run eurostream contracts --baseline governance/contracts.json   # exit 1 on drift
+uv run eurostream contracts --out governance/contracts.json        # conscious regeneration
+```
+
+Two layers enforce it:
+
+1. CI job runs the CLI against the committed baseline.
+2. `test_committed_baseline_matches_current_models` makes plain `pytest` fail
+   too — you can't even run tests locally without noticing stale contracts.
+
+## Gotchas & tips
+
+- **Regeneration must be a deliberate act** with a commit message explaining
+  why the break is acceptable — the friction *is* the feature.
+- **Include Literal discriminators in type checks.** Renaming
+  `"order_placed"` to `"order_created"` is a breaking change even though
+  Python calls both "a string".
+- **Tip:** version events (`schema_version: int`) from day one — it's in the
+  base model here — so consumers can branch on version before they need to.
+
+Read next: [quality gates & testing](/cookbook/quality-gates-testing).

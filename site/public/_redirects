@@ -1,0 +1,6 @@
+# Redirects from the pre-Astro static pages to their cookbook equivalents
+/architecture.html        /deep-dives/why-this-architecture   301
+/components.html          /cookbook/event-bus-abstraction     301
+/gdpr.html                /cookbook/gdpr-erasure-cascade      301
+/deployment.html          /reference/deploy-cloudflare-pages  301
+/index.html               /                                   301

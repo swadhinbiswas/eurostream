@@ -1,0 +1,71 @@
+name: orchestrate
+
+on:
+  schedule:
+    - cron: "0 */5 * * *"  # every 5 hours -> ~1k new rows
+  push:
+    branches: [master]  # also on every push to swadhinbiswas/eustream lake
+  workflow_dispatch: {}
+
+jobs:
+  medallion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - name: Validate Kafka secrets
+        run: |
+          if [ -z "${{ secrets.KAFKA_BOOTSTRAP_SERVERS }}" ]; then echo "::error::KAFKA_BOOTSTRAP_SERVERS secret is empty — set host:port (not full URI) in GitHub Secrets"; exit 1; fi
+          echo "bootstrap host: $(echo '${{ secrets.KAFKA_BOOTSTRAP_SERVERS }}' | sed -E 's|.*@||; s|/.*||' | cut -c1-40)***"
+      - name: Create Kafka topics if missing (Aiven auto-create disabled)
+        run: |
+          uv run python -c "
+          from confluent_kafka.admin import AdminClient, NewTopic
+          import os, re
+          raw=os.environ['KAFKA_BOOTSTRAP']
+          # clean full Service URI -> host:port (handles https://user:pass@host:port)
+          if '://' in raw: raw=raw.split('://',1)[1]
+          if '@' in raw: raw=raw.split('@',1)[1]
+          raw=raw.split('/',1)[0].strip()
+          if not raw or '***' in raw:
+              raise SystemExit('KAFKA_BOOTSTRAP_SERVERS is not set correctly — use host:port only')
+          conf={'bootstrap.servers': raw,'security.protocol':'SASL_SSL','sasl.mechanism':'SCRAM-SHA-256','sasl.username':os.environ['KAFKA_USER'],'sasl.password':os.environ['KAFKA_PASS']}
+          admin=AdminClient(conf)
+          topics=[NewTopic(t,1,1) for t in ['orders','clicks','payments','erasure_requests']]
+          fs=admin.create_topics(topics, request_timeout=15)
+          for t,f in fs.items():
+              try: f.result(); print(f'created {t}')
+              except Exception as e:
+                  if 'TopicAlreadyExists' in str(e) or 'already exists' in str(e).lower():
+                      print(f'{t}: already exists')
+                  else:
+                      print(f'{t}: {e}')
+          "
+        env:
+          KAFKA_BOOTSTRAP: ${{ secrets.KAFKA_BOOTSTRAP_SERVERS }}
+          KAFKA_USER: ${{ secrets.KAFKA_USERNAME }}
+          KAFKA_PASS: ${{ secrets.KAFKA_PASSWORD }}
+      - name: Produce 1k new synthetic events
+        timeout-minutes: 4
+        run: timeout 180 uv run eurostream produce --events 1000 || (echo "::error::produce timed out — check Aiven bootstrap/host and SASL credentials"; exit 1)
+        env:
+          EUROSTREAM_EVENT_BUS_BACKEND: kafka
+          EUROSTREAM_KAFKA_BOOTSTRAP_SERVERS: ${{ secrets.KAFKA_BOOTSTRAP_SERVERS }}
+          EUROSTREAM_KAFKA_USERNAME: ${{ secrets.KAFKA_USERNAME }}
+          EUROSTREAM_KAFKA_PASSWORD: ${{ secrets.KAFKA_PASSWORD }}
+          EUROSTREAM_KAFKA_SECURITY_PROTOCOL: SASL_SSL
+          EUROSTREAM_KAFKA_SASL_MECHANISM: SCRAM-SHA-256
+      - name: Incremental transform + lake
+        run: uv run eurostream transform --incremental
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          EUROSTREAM_KAFKA_BOOTSTRAP_SERVERS: ${{ secrets.KAFKA_BOOTSTRAP_SERVERS }}
+          EUROSTREAM_KAFKA_USERNAME: ${{ secrets.KAFKA_USERNAME }}
+          EUROSTREAM_KAFKA_PASSWORD: ${{ secrets.KAFKA_PASSWORD }}
+      - name: Push lake to HF swadhinbiswas/eustream
+        run: |
+          pip install huggingface_hub
+          hf upload swadhinbiswas/eustream data/lake --repo-type dataset --token ${{ secrets.HF_TOKEN }}

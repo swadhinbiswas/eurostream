@@ -1,0 +1,10 @@
+{
+  "bronze.orders": {
+    "email": [
+      "EMAIL"
+    ],
+    "iban": [
+      "IBAN"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+name = "eurostream-docs"
+compatibility_date = "2025-01-01"
+
+# Cloudflare Pages project config. With Git integration the dashboard build
+# settings are: framework "Astro", build command "npm run build",
+# output directory "dist", root directory "site".
+# For direct upload: npx wrangler pages deploy dist --project-name eurostream-docs
+
+[vars]
+SITE_URL = "https://eurostream-docs.pages.dev"

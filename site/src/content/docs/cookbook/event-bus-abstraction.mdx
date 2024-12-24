@@ -1,0 +1,151 @@
+---
+title: "Recipe 1 — Event Bus Abstraction: Kafka Semantics on SQLite"
+description: "Build a durable append-only event log with topics, partitions, consumer groups and offset tracking using SQLite WAL mode — with a Producer/Consumer interface that swaps to confluent-kafka via one environment variable."
+sidebar:
+  order: 2
+---
+
+## Problem
+
+Every streaming component needs a log to read from. But requiring Kafka for a
+portfolio platform kills the "runs anywhere in 60 seconds" property, and
+faking a bus with an in-memory queue destroys the properties that matter:
+durability, replay, and per-consumer progress.
+
+**The real requirement is not Kafka — it's Kafka's semantics:**
+
+- durable append-only log per topic/partition
+- consumers track their own committed offsets per group
+- new groups start at the tail (or earliest) explicitly
+- replayability: re-read from any offset
+
+## Why this way
+
+| Option | Verdict |
+|---|---|
+| In-memory list | No durability, no replay — rejected |
+| Redis Streams | Right shape, but adds infrastructure dependency |
+| **SQLite (WAL) behind a `Producer`/`Consumer` ABC** | ✅ Identical semantics, zero deps; swap adapter later |
+
+The decision principle: **application code depends on interfaces, never on
+implementations**. The bus choice becomes deployment config.
+
+## The recipe
+
+### 1. The contract (`src/eurostream/bus/__init__.py`)
+
+```python
+class Producer(ABC):
+    @abstractmethod
+    def produce(self, topic: str, key: str, value: str,
+                headers: dict[str, str] | None = None) -> RecordMetadata: ...
+
+class Consumer(ABC):
+    @abstractmethod
+    def poll(self, timeout: float = 0.0) -> Record | None: ...
+    @abstractmethod
+    def commit(self) -> None: ...
+    @abstractmethod
+    def close(self) -> None: ...
+```
+
+`Record` mirrors a Kafka message (topic/key/value/offset/partition/timestamp/
+headers). Everything downstream — producers, scorers, erasure workers —
+accepts these ABCs and never learns which backend exists.
+
+### 2. The log schema (`bus/sqlite.py`)
+
+Three tables reproduce the broker:
+
+```sql
+CREATE TABLE messages (
+    topic TEXT, partition INTEGER, offset INTEGER,
+    key TEXT, value TEXT, headers TEXT, ts REAL,
+    PRIMARY KEY (topic, partition, offset)
+);
+CREATE TABLE consumer_offsets (
+    consumer_group TEXT, topic TEXT, partition INTEGER, offset INTEGER,
+    PRIMARY KEY (consumer_group, topic, partition)
+);
+CREATE TABLE broker_offsets (
+    topic TEXT, partition INTEGER, next_offset INTEGER,
+    PRIMARY KEY (topic, partition)
+);
+```
+
+Producing is one transaction: compute `next_offset`, insert the message,
+advance the broker offset, commit.
+
+```python
+def produce(self, topic, key, value, headers=None):
+    partition = 0
+    offset = self._next_offset(topic, partition)
+    self._conn.execute(
+        "INSERT OR REPLACE INTO messages (...) VALUES (?,?,?,?,?,?,?)",
+        (topic, partition, offset, key, value, json.dumps(headers or {}), time.time()),
+    )
+    ...
+    self._conn.commit()
+    if offset % self._checkpoint == 0:
+        self._conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
+    return RecordMetadata(topic=topic, offset=offset, partition=partition)
+```
+
+The checkpoint folds the write-ahead log back into the main database file
+every N produces so durability doesn't hinge solely on `-wal` files.
+
+### 3. Offset semantics consumers can trust
+
+A consumer loads its group's committed position; absent that, `latest` or
+`earliest` applies — mirroring `auto.offset.reset`:
+
+```python
+def _load_position(self, start: str) -> int:
+    row = ...  # committed offset for (group, topic, partition)
+    if row is not None:
+        return int(row["offset"])
+    return 0 if start == "earliest" else broker_next_offset
+```
+
+This is what lets the demo drain topics with fresh groups while long-running
+workers resume where they stopped.
+
+### 4. The production swap (`bus/kafka.py`)
+
+Same interface over `confluent-kafka`, including header pass-through and
+real offsets captured from delivery callbacks:
+
+```python
+def produce(self, topic, key, value, headers=None):
+    delivered = threading.Event()
+    result: dict[str, int] = {}
+    def _on_delivery(err, msg):
+        if err is None and msg is not None:
+            result["offset"] = int(msg.offset())
+            result["partition"] = int(msg.partition())
+        delivered.set()
+    self._producer.produce(topic, key=key.encode(), value=value.encode(),
+                           headers=headers, on_delivery=_on_delivery)
+    self._producer.flush()   # callbacks have run by now
+    return RecordMetadata(topic=topic, partition=result.get("partition", 0),
+                          offset=result.get("offset", -1))
+```
+
+Switching backends is one environment variable:
+`EUROSTREAM_EVENT_BUS_BACKEND=kafka`.
+
+## Gotchas & tips
+
+- **`check_same_thread=False`** is required because the CLI produces from the
+  main thread while workers consume elsewhere. Pair it with short-lived
+  transactions.
+- **WAL mode is not optional.** Without `PRAGMA journal_mode=WAL` every
+  commit fsyncs the whole file and throughput collapses.
+- **Headers are part of the contract.** The erasure tombstone carries
+  `schema_version` and `event_type` in headers; dropping them silently (as an
+  early version of this adapter did) breaks routing at scale even when local
+  tests stay green.
+- **Tip:** give `Record.json_value()` a home in the *bus* module, not in
+  consumers — JSON decoding belongs at the transport boundary.
+
+Read next: [streaming fraud scoring](/cookbook/streaming-fraud-scoring).

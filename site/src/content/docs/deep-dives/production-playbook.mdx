@@ -1,0 +1,102 @@
+---
+title: "Production Playbook — Scaling EuroStream from Laptop to Cluster"
+description: "The concrete swap path from SQLite/DuckDB to Kafka/Snowflake/Airflow, operational runbooks for erasure SLAs and PII salt rotation, plus honest scaling limits of the local stack."
+sidebar:
+  order: 3
+---
+
+The local stack is deliberately single-node. This playbook is the contract
+for what changes when it meets real traffic — component by component.
+
+## Swap matrix
+
+| Component | Local | Production swap | Code that changes |
+|---|---|---|---|
+| Event bus | `SqliteBus` | `KafkaProducer`/`KafkaConsumer` (already written) | `EUROSTREAM_EVENT_BUS_BACKEND=kafka` |
+| Warehouse | DuckDB file | Snowflake/BigQuery | Connection string; SQL is standard |
+| Orchestration | local DAG executor | Airflow/Mage | Wrap the same task callables as operators |
+| PII detection | pure-Python recognizers | Presidio adapter | Implement the recognizer interface against Presidio |
+| Audit log | JSONL + warehouse table | + S3 Object Lock (WORM) | Add an upload step to `_append_audit` |
+| Metrics | JSONL snapshots | Prometheus/Grafana scrape | Renderer exists (`render_prometheus`) |
+| API auth | none | Gateway/SSO in front | Zero app code |
+
+## Deployment topologies
+
+### Single region (recommended first step)
+
+```
+Cloudflare Pages (docs)          ECS/Fargate or k8s
+└── this cookbook                ├── api (FastAPI, 2+ replicas)
+                                 ├── erasure-worker (1+, consumer group)
+Kafka (MSK, eu-central-1)        └── medallion-scheduler (cron/Airflow)
+S3: bronze zone + WORM audit
+Snowflake: silver/gold
+```
+
+Everything pinned to **eu-central-1** (`infra/main.tf` provisions MSK with
+TLS, versioned encrypted S3, IAM roles).
+
+### What runs where
+
+- **api** — stateless; scales horizontally; only enqueues tombstones.
+- **erasure-worker** — consumes `erasure_requests`; scale within one consumer
+  group; suppression registry reads/writes go through the warehouse so any
+  replica sees the same set.
+- **medallion DAG** — scheduled batch; DuckDB's single-writer model maps to
+  one scheduler-issued job per cycle (or move to Snowflake tasks).
+
+## Operational runbooks
+
+### Erasure SLA breach
+
+1. Alert fires on `erasure_sla_breach > 0`.
+2. Check worker liveness (`/health` lists suppressed IDs).
+3. Inspect `governance.data_quality_runs` + audit log for the request ID.
+4. Replay is safe: tombstones are idempotent — re-executing produces a second
+   audit record, not duplicated deletions.
+
+### PII salt rotation
+
+Rotating `EUROSTREAM_PII_SALT` invalidates existing Silver hashes. Plan:
+
+1. Freeze Gold consumers that join on hashes (they shouldn't exist — hashes
+   are for privacy, not joins).
+2. Rebuild Silver with the new salt (`transform` is a full rebuild by design).
+3. Verify via `test_silver_hashes_match_hash_pii_scheme` semantics against a
+   sample row.
+
+### Schema evolution
+
+1. Change the pydantic model.
+2. CI fails if breaking → regenerate baseline consciously with justification
+   in the commit message ([recipe 6](/cookbook/schema-contracts-ci)).
+3. Consumers upgrade at their pace because additive changes never break them.
+
+### Backfill / replay
+
+Bronze rebuilds are idempotent deletes + inserts. To replay from the bus:
+new consumer group, `auto_offset_reset="earliest"`, re-run transforms. The
+log *is* the backup for event history.
+
+## Known limits (and their triggers to act on)
+
+| Limit | Trigger to migrate |
+|---|---|
+| SQLite bus: single writer | >~1k events/s sustained, or multi-host producers |
+| DuckDB: no concurrent writers | Any second concurrent writer process |
+| In-memory fraud windows: one process | Stream path needs >1 replica → move window state to Kafka Streams/Flink |
+| JSONL metrics: single file | First Grafana board → Prometheus scraper |
+
+None of these require application rewrites — see the swap matrix.
+
+## Cost picture (roughly, monthly)
+
+| Piece | Service | Cost band |
+|---|---|---|
+| Docs | Cloudflare Pages free tier | €0 |
+| Bus | MSK smallest | ~€150+ |
+| Lake/audit | S3 | cents–€10s |
+| Warehouse | Snowflake | usage-based |
+
+The entire platform story demonstrable at €0; production sizing starts at the
+bus.

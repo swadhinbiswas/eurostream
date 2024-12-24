@@ -1,0 +1,61 @@
+---
+title: "Overview — What EuroStream Is and the Problem It Solves"
+description: "Why most demo data pipelines fail EU compliance, and how EuroStream solves it — a GDPR-compliant real-time analytics platform with fraud detection, a medallion warehouse and provable right-to-erasure in pure Python."
+sidebar:
+  order: 1
+---
+
+Most portfolio pipelines move events from A to B and stop there. That's the
+easy half of a data platform. The hard half — the half EU employers actually
+screen for — is **proving what happens to personal data after it arrives**:
+
+- Can you delete one person from every layer within an SLA?
+- Can you prove the deletion happened, without exposing their identity?
+- Can you stop non-consenting customers leaking into marketing segments?
+- Can you catch unregistered PII *before* it propagates, not after?
+
+EuroStream answers all four with working code. It is a **GDPR-compliant
+real-time customer & order analytics platform**: simulated EU source systems,
+a durable event bus, windowed streaming fraud detection, a medallion warehouse
+with PII governance baked into every layer, and a right-to-erasure cascade
+with a tamper-evident audit trail.
+
+## The constraints that shaped everything
+
+| Constraint | Consequence |
+|---|---|
+| Must run on a laptop, zero Docker/JVM/cloud | SQLite event bus, DuckDB warehouse, pure-Python streaming |
+| Same code local and deployed | `Producer`/`Consumer` interfaces; Kafka adapter behind a config flag |
+| GDPR Article 17 must be executable, not aspirational | Erasure cascade touches every layer + writes audit records with confirmation hashes |
+| Governance must be enforced, not documented | PII manifest gate and schema contracts run **in CI**, failing the build |
+
+## What "compliant" means concretely here
+
+1. **Right to erasure (Art. 17)** — `POST /erasure-requests` or
+   `eurostream erase <id>` fans a deletion out to every layer: suppression on
+   the stream, anonymization in Bronze, deletion in Silver/Gold, alerts
+   purged, lake re-snapshotted. A `sha256(request_id:customer_id)[:16]`
+   confirmation hash proves execution to a DSAR team.
+2. **Consent gating** — `marketing_consent` flows through Silver into Gold;
+   a data-quality gate fails the DAG if the mirror ever breaks.
+3. **Data minimization at boundaries** — Silver hashes PII with salted
+   SHA-256 (one scheme shared between SQL and Python); Gold never sees raw
+   PII; the Parquet lake only ever receives de-identified layers.
+4. **Schema governance** — event contracts are snapshotted to JSON and CI
+   fails on breaking drift before consumers are broken.
+
+## What's inside the box
+
+| Component | Implementation | Swap path |
+|---|---|---|
+| Event bus | Durable append-only log on SQLite (WAL), consumer groups, offsets | `confluent-kafka` adapter via env var |
+| Streaming | Windowed rules: velocity, amount z-score, geo mismatch | Spark Structured Streaming |
+| Warehouse | Bronze → Silver → Gold on DuckDB | Snowflake/BigQuery (SQL is standard) |
+| Orchestration | Minimal DAG executor, topological order, retries | Airflow/Mage tasks unchanged |
+| Governance | PII classifier (ISO 13616 IBAN), erasure service, audit log | Presidio adapter |
+| Quality | Uniqueness, RI, PII-not-clear, consent mirror checks | dbt tests / Great Expectations |
+| API | FastAPI: erasure intake, health, metrics, gold reads | unchanged |
+| Docs site | This cookbook — Astro + Starlight on Cloudflare Pages | — |
+
+Read next: [Quickstart](/quickstart) or jump straight into
+[the first recipe](/cookbook/event-bus-abstraction).

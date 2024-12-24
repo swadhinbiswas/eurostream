@@ -1,0 +1,38 @@
+---
+title: "The EuroStream Cookbook — Recipes for GDPR-Compliant Data Platforms"
+description: "Eight engineering recipes covering every hard problem in a governed real-time analytics platform — durable event logs, streaming fraud rules, medallion transforms, Article 17 erasure cascades, PII governance, schema contracts and data quality gates."
+sidebar:
+  order: 1
+---
+
+A recipe here is not a code dump. Each one follows the same shape so you can
+lift the *reasoning*, not just the implementation:
+
+1. **Problem** — what breaks if you don't solve this properly.
+2. **Why this way** — options considered, decision made, trade-offs accepted.
+3. **The recipe** — the actual implementation, explained line by line.
+4. **Gotchas & tips** — the mistakes that were made (really) and how to avoid
+   them.
+
+## The recipes
+
+| # | Recipe | The problem it solves |
+|---|--------|----------------------|
+| 1 | [Event bus abstraction](/cookbook/event-bus-abstraction) | Kafka-grade semantics (offsets, consumer groups, replay) with zero infrastructure |
+| 2 | [Streaming fraud scoring](/cookbook/streaming-fraud-scoring) | Windowed real-time rules without Spark — plus alert fatigue control |
+| 3 | [Medallion warehouse](/cookbook/medallion-warehouse) | Deduplication, typing and PII hashing as pure SQL transforms |
+| 4 | [GDPR erasure cascade](/cookbook/gdpr-erasure-cascade) | Provable deletion across every layer within an SLA |
+| 5 | [PII governance](/cookbook/pii-governance) | Unregistered PII fails the pipeline before it propagates |
+| 6 | [Schema contracts in CI](/cookbook/schema-contracts-ci) | Breaking drift blocked at build time, not discovered by consumers |
+| 7 | [Quality gates & testing](/cookbook/quality-gates-testing) | Invariants that fail the DAG; tests that map to guarantees |
+
+## How to read them
+
+If you're short on time, read [the erasure cascade](/cookbook/gdpr-erasure-cascade)
+first — it's the differentiator and the chapter most interviews gravitate
+toward. Then [why this architecture wins](/deep-dives/why-this-architecture)
+for the systems-design argument.
+
+If you're preparing for interviews, add
+[pitch & talking points](/interview/pitch-talking-points) and
+[questions & answers](/interview/questions-answers).

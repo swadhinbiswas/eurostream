@@ -1,0 +1,56 @@
+---
+title: "Configuration Reference — Every EUROSTREAM_ Environment Variable"
+description: "Complete configuration reference for the EuroStream platform — all EUROSTREAM_ environment variables with defaults and descriptions, pydantic-settings usage, .env files and production secret management guidance."
+sidebar:
+  order: 1
+---
+
+All settings live in `src/eurostream/config.py` as a pydantic-settings
+`Settings` model. Values come from `EUROSTREAM_*` environment variables or a
+`.env` file in the project root — nothing is hardcoded.
+
+## Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `EUROSTREAM_EVENT_BUS_BACKEND` | `sqlite` | `sqlite` (local durable log) or `kafka` (confluent-kafka adapter) |
+| `EUROSTREAM_DATA_DIR` | `<repo>/data` | Root for bus log, warehouse, lake, logs |
+| `EUROSTREAM_WAREHOUSE_PATH` | `<repo>/data/eurocart.duckdb` | DuckDB database file |
+| `EUROSTREAM_LAKE_ROOT` | `<repo>/data/lake` | Parquet export root (Silver/Gold only) |
+| `EUROSTREAM_PII_SALT` | `eurostream-pii-salt` | Salt for PII hashing — **load from a secret manager in production** |
+| `EUROSTREAM_CONSENT_DEFAULT` | `false` | Default consent flag for simulated customers |
+| `EUROSTREAM_ERASURE_SLA_SECONDS` | `60` | Documented erasure SLA; breaches increment a metric |
+| `EUROSTREAM_FRAUD_VELOCITY_THRESHOLD` | `5` | Payments per customer per window before a VELOCITY alert |
+| `EUROSTREAM_FRAUD_WINDOW_SECONDS` | `300` | Tumbling window size for fraud scoring |
+| `EUROSTREAM_FRAUD_AMOUNT_ZSCORE` | `3.0` | Standard deviations for AMOUNT_ZSCORE alerts |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka bootstrap string when backend is `kafka` |
+
+Derived paths (also overridable): `audit_log_path`
+(`data/logs/erasure_audit.jsonl`), `metrics_path`
+(`data/logs/metrics.jsonl`), `pipeline_log_path`, `pii_manifest_path`
+(`governance/pii_manifest.json`).
+
+## Path resolution rule
+
+Defaults anchor to the repository root when running from a source checkout.
+When the package is installed (container images), the root falls back to the
+current working directory so containers can point storage at a mounted
+volume:
+
+```python
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if not (PROJECT_ROOT / "pyproject.toml").exists():
+    PROJECT_ROOT = Path.cwd()
+```
+
+This exact check exists because the Docker smoke test caught defaults
+resolving into read-only site-packages.
+
+## Production notes
+
+- Secrets (`EUROSTREAM_PII_SALT`) never belong in images or repos — inject at
+  runtime from your secret manager.
+- Rotating the salt invalidates existing Silver hashes; run a Silver rebuild
+  after rotation ([playbook](/deep-dives/production-playbook#pii-salt-rotation)).
+- Copy [.env.example](https://github.com/swadhin/eurostream/blob/main/.env.example)
+  as your starting point.

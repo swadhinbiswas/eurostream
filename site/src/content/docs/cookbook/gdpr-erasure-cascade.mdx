@@ -1,0 +1,131 @@
+---
+title: "Recipe 4 — The GDPR Article 17 Erasure Cascade: Provable Deletion Across Every Layer"
+description: "Implement a working GDPR right-to-erasure cascade — durable suppression registry, Bronze anonymization, Silver/Gold deletion, alert purging, lake re-snapshotting, SLA metrics and tamper-evident audit hashes — with verification tests."
+sidebar:
+  order: 5
+---
+
+## Problem
+
+Article 17 gives data subjects the right to erasure "without undue delay".
+Most systems treat this as a database `DELETE`. In a platform with a stream,
+a raw layer, derived layers, exported files and fraud alerts, deletion is a
+**distributed transaction with an audit obligation**. Miss one surface and
+the erasure is fiction.
+
+## Why this way
+
+| Option | Verdict |
+|---|---|
+| Delete rows in each table ad hoc | No ordering, no proof, misses streaming state |
+| Soft-delete flag everywhere | Personal data still present — not Article 17 |
+| **Ordered cascade + suppression + audit records** | ✅ Deterministic, provable, testable |
+
+## The recipe
+
+### 1. Intake is a tombstone on the bus
+
+```python
+def request_erasure(self, customer_id, request_id=None, requested_by=...):
+    rid = request_id or _new_id()
+    evt = ErasureRequested(event_id=rid, occurred_at=time.time(),
+                           request_id=rid, customer_id=customer_id,
+                           requested_by=requested_by)
+    self._producer.produce("erasure_requests", key=customer_id,
+                           value=evt.model_dump_json(),
+                           headers={"schema_version": ..., "event_type": ...})
+    return evt.request_id
+```
+
+The tombstone decouples intake (API) from execution (worker) and gives you
+replay for free. Note the single `rid` for both `event_id` and `request_id` —
+an early draft generated two UUIDs and split the request's identity in half.
+
+### 2. The cascade, in order
+
+```python
+def execute(self, event) -> ErasureAudit:
+    layers = []
+    # 1. Suppress first — stop new derived data immediately.
+    self._suppressed.add(event.customer_id)
+    self._warehouse.add_suppressed(event.customer_id)   # durable registry
+    layers.append("suppression_registry")
+    # 2. Anonymize / delete across warehouse layers.
+    self._anonymize_warehouse(event.customer_id)
+    layers.append("warehouse")
+    ...
+```
+
+Ordering matters:
+
+1. **Suppression registry** — in-memory set for zero-latency checks *plus* a
+   durable table so other processes seed from it on startup. Streaming
+   consumers call `is_suppressed()` before scoring.
+2. **Bronze** — PII columns become `<anonymized>`; rows survive so event
+   history keeps its shape.
+3. **Silver** — customer, orders, payments deleted (derived personal data).
+4. **Gold** — customer_360, order_facts, fraud_summary deleted.
+5. **Fraud alerts** — purged.
+6. **Lake** — re-exported via the completion hook so no stale Parquet copy
+   survives.
+
+### 3. Proof without exposure
+
+```python
+def _confirmation_hash(self, request_id, customer_id):
+    return hashlib.sha256(f"{request_id}:{customer_id}".encode()).hexdigest()[:16]
+```
+
+Every execution appends to `data/logs/erasure_audit.jsonl` and the
+`governance.erasure_audit_log` table:
+
+```json
+{
+  "request_id": "a1b2c3d4-...",
+  "customer_id": "cust_424242",
+  "layers_touched": ["suppression_registry", "warehouse"],
+  "status": "completed",
+  "confirmation_hash": "9f1c...e2"
+}
+```
+
+A DSAR team can demonstrate that request X executed against subject Y
+without storing anything reversible.
+
+### 4. SLAs are measured, not declared
+
+```python
+self._metrics.observe("erasure_latency", latency)
+if latency > self._sla:
+    self._metrics.incr("erasure_sla_breach")
+```
+
+### 5. Verification is part of the product
+
+The demo's stage 5 asserts the outcome, not the intention:
+
+```python
+gold_after = warehouse.scalar(
+    "SELECT count(*) FROM gold.customer_360 WHERE customer_id = ?", ...)
+audit_rows = warehouse.scalar(
+    "SELECT count(*) FROM governance.erasure_audit_log WHERE customer_id = ?", ...)
+verification = "PASSED" if gold_after == 0 and audit_rows == 1 else "FAILED"
+```
+
+And `tests/test_erasure.py` pins the whole contract end-to-end, including
+that a fresh service instance seeds suppression from the durable table.
+
+## Gotchas & tips
+
+- **Suppression must precede deletion.** Otherwise the scorer can emit new
+  alerts mid-cascade.
+- **Anonymize, don't delete, Bronze** — preserving row shape keeps downstream
+  counts meaningful while destroying the personal data.
+- **One identity per request**: tombstone `event_id == request_id`, or audit
+  trails diverge.
+- **Re-export derived copies** (lake, caches, search indexes) inside the same
+  request, or your erasure has a blind spot.
+- **Tip:** put the cascade behind both a CLI (`eurostream erase`) and the API.
+  The CLI doubles as an ops runbook entry point when the API is down.
+
+Read next: [PII governance as a pipeline gate](/cookbook/pii-governance).

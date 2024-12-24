@@ -1,0 +1,72 @@
+---
+title: "Deploying the EuroStream Platform — Docker & AWS eu-central-1"
+description: "Production deployment for the EuroStream platform — multi-stage Docker image with non-root user and healthcheck, docker-compose local stack, and Terraform provisioning MSK, S3 and IAM in AWS Frankfurt."
+sidebar:
+  order: 4
+---
+
+## Container image
+
+The Dockerfile is multi-stage:
+
+- **builder** installs the package into `/opt/venv`
+- **runtime** copies only that venv; runs as non-root `eurostream` user;
+  declares a `HEALTHCHECK` against `/health`; exposes port 8000
+
+```bash
+docker build -t eurostream .
+docker run --rm -p 8000:8000 eurostream
+```
+
+The CI pipeline builds this image and **smoke-tests it by running the full
+end-to-end demo inside it** — which is how the site-packages path bug was
+caught before any human ran the container.
+
+## Compose stack
+
+```bash
+docker compose up -d          # API with healthcheck + named volume
+docker compose run --rm demo  # one-shot end-to-end demo (tools profile)
+```
+
+Storage lives in the `eurostream-data` volume mounted at `/app/data` — the
+only writable path in the container.
+
+## AWS topology (`infra/main.tf`)
+
+Everything pinned to **eu-central-1** (Frankfurt) — data residency is an
+architecture constraint, not a preference:
+
+| Resource | Purpose |
+|---|---|
+| S3 bucket | Object lake zone (versioned, AES-256) |
+| IAM role | Pipeline workers — least privilege |
+| MSK cluster | Kafka, TLS-encrypted |
+
+Apply with the usual:
+
+```bash
+cd infra && terraform init && terraform plan && terraform apply
+```
+
+## Environment wiring
+
+The same application code serves local and cloud because backends swap via
+config:
+
+```bash
+EUROSTREAM_EVENT_BUS_BACKEND=kafka \
+EUROSTREAM_PII_SALT="$(aws secretsmanager get-secret-value ...)" \
+uvicorn eurostream.api:app --host 0.0.0.0 --port 8000
+```
+
+See the [production playbook](/deep-dives/production-playbook) for the full
+topology and scaling triggers.
+
+## Operational checklist
+
+- [ ] Healthcheck-backed rolling deploys (compose/k8s probes hit `/health`)
+- [ ] Audit JSONL shipped to WORM storage
+- [ ] Metrics scraped from `/metrics`
+- [ ] Erasure worker in its own consumer group, autoscaled on queue depth
+- [ ] Medallion DAG scheduled (cron/Airflow) with quality-gate failure alerts
