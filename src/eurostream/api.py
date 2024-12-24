@@ -77,11 +77,28 @@ def create_app(
                 stats["bronze_orders"] = warehouse.scalar("SELECT count(*) FROM bronze.orders")
                 stats["bronze_clicks"] = warehouse.scalar("SELECT count(*) FROM bronze.clicks")
                 stats["bronze_payments"] = warehouse.scalar("SELECT count(*) FROM bronze.payments")
+                stats["bronze_fraud_alerts"] = warehouse.scalar("SELECT count(*) FROM bronze.fraud_alerts")
                 stats["silver_customers"] = warehouse.scalar("SELECT count(*) FROM silver.customers")
+                stats["silver_orders"] = warehouse.scalar("SELECT count(*) FROM silver.orders")
+                stats["silver_payments"] = warehouse.scalar("SELECT count(*) FROM silver.payments")
                 stats["gold_customers"] = warehouse.scalar("SELECT count(*) FROM gold.customer_360")
+                stats["gold_order_facts"] = warehouse.scalar("SELECT count(*) FROM gold.order_facts")
                 stats["fraud_alerts"] = warehouse.scalar("SELECT count(*) FROM gold.fraud_summary")
+                try:
+                    stats["silver_watermark"] = warehouse.get_watermark("silver")
+                    stats["gold_watermark"] = warehouse.get_watermark("gold")
+                    # lineage last
+                    import pathlib
+                    lp = settings.data_dir / "lineage.jsonl"
+                    if lp.exists():
+                        lines = lp.read_text().strip().splitlines()
+                        if lines:
+                            stats["lineage"] = lines[-1][:400]
+                except Exception:
+                    pass
             except Exception as e:
                 logger.debug("Failed to query stats from warehouse: %s", e)
+        stats["total_rows"] = sum(int(stats.get(k, 0)) for k in ["bronze_orders","bronze_clicks","bronze_payments","silver_customers","gold_customers"])
         return stats
 
     @app.post("/erasure-requests")
@@ -139,7 +156,11 @@ def bootstrap() -> FastAPI:
 
     settings = Settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    bus = open_bus(settings.data_dir / "events.db")
+    if settings.event_bus_backend == "kafka":
+        from eurostream.bus.kafka import KafkaBus
+        bus = KafkaBus(settings)
+    else:
+        bus = open_bus(settings.data_dir / "events.db")
     warehouse = Warehouse(settings.warehouse_path)
     metrics = Metrics(settings.metrics_path)
 
