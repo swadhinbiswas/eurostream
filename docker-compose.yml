@@ -1,0 +1,39 @@
+services:
+  api:
+    build: .
+    image: eurostream:latest
+    ports:
+      - "8000:8000"
+    environment:
+      EUROSTREAM_DATA_DIR: /app/data
+      EUROSTREAM_WAREHOUSE_PATH: /app/data/eurocart.duckdb
+      EUROSTREAM_ERASURE_SLA_SECONDS: ${EUROSTREAM_ERASURE_SLA_SECONDS:-60}
+    volumes:
+      - eurostream-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  # One-shot job: runs the end-to-end demo against the shared data volume.
+  # Useful as a smoke test after `docker compose up api -d`.
+  demo:
+    build: .
+    image: eurostream:latest
+    profiles: ["tools"]
+    environment:
+      EUROSTREAM_DATA_DIR: /app/data
+      EUROSTREAM_WAREHOUSE_PATH: /app/data/demo.duckdb
+    volumes:
+      - eurostream-data:/app/data
+    command: eurostream demo
+
+volumes:
+  eurostream-data:

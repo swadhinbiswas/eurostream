@@ -1,0 +1,99 @@
+---
+title: "Why This Architecture Wins — Design Analysis of a GDPR-Compliant Streaming Platform"
+description: "A systems-design analysis of EuroStream's Lambda architecture — why the event bus abstraction, medallion warehouse and governance-as-code are the most effective choices for EU data platforms, with rejected alternatives and scaling paths."
+sidebar:
+  order: 1
+---
+
+Every serious data platform converges on three needs: **one shared log**,
+**two processing paths**, and **governed outputs**. EuroStream implements
+that convergence in its most testable form. Here's the argument for why each
+major decision is the most effective one under its constraints.
+
+## 1. Lambda architecture — because fraud and truth have different SLAs
+
+```
+                 ┌──► Speed path: windowed rules (seconds)
+   Event bus ────┤
+                 └──► Batch path: medallion DAG (minutes, authoritative)
+```
+
+Fraud detection must answer *now* with partial information; reporting must
+answer *correctly* with complete information. Forcing both through one path
+sacrifices one for the other. The two paths **share the log but not state**,
+which means:
+
+- the speed path can be stateless-ish and restart freely
+- the batch path remains the source of truth; speed-path output
+  (`fraud_alerts`) lands in Bronze like any other event
+- you can replay either path independently
+
+This is the same shape as production Lambda/Kappa designs at every large EU
+e-commerce company — which is exactly why it's worth demonstrating.
+
+## 2. Interfaces over infrastructure — portability as an architecture feature
+
+Every component boundary is the interface its production counterpart uses:
+
+| Boundary | Interface | Local impl | Production impl |
+|---|---|---|---|
+| Transport | `Producer`/`Consumer` | SQLite WAL log | confluent-kafka |
+| Warehouse | standard SQL | DuckDB file | Snowflake/BigQuery |
+| Orchestration | `Callable` tasks + deps | local DAG executor | Airflow operators |
+| PII detection | recognizer functions | pure Python | Presidio adapter |
+
+The payoff isn't ideological purity — it's that **every claim in this
+cookbook is verifiable on a laptop**, and the migration cost at scale is
+configuration plus adapter code, not application rewrites. That's what
+"designed for the deployment" means in practice.
+
+## 3. Governance as code — because documents don't enforce anything
+
+Three enforcement points, all automated:
+
+1. **Ingestion**: PII manifest gate fails the DAG on unregistered personal
+   data columns ([recipe 5](/cookbook/pii-governance)).
+2. **Build time**: schema contracts fail CI on breaking drift
+   ([recipe 6](/cookbook/schema-contracts-ci)).
+3. **Output**: quality gates fail the pipeline on uniqueness/RI/PII/consent
+   violations ([recipe 7](/cookbook/quality-gates-testing)).
+
+Most platforms treat compliance as documentation. Here it's executable and
+therefore testable — the difference between claiming Article 17 capability
+and running `pytest`.
+
+## 4. Erasure as a first-class subsystem
+
+The cascade ([recipe 4](/cookbook/gdpr-erasure-cascade)) treats deletion like
+any other distributed write: ordered steps, durable coordination (tombstone +
+suppression registry), measured SLA, tamper-evident audit. Platforms that
+bolt erasure on later get inconsistent results across layers; here it's the
+architecture's centerpiece.
+
+## 5. Effectiveness math
+
+What does "most effective way" mean measurably?
+
+- **Zero infrastructure to run the whole story** — SQLite + DuckDB + Python.
+  Time-to-first-erasure-proof: under a minute.
+- **~1,200 source lines** implement transport semantics, stream processing,
+  medallion transforms, governance and API — small enough to fully understand
+  before an interview, complete enough to be real.
+- **49 tests, 5 CI gates, one command** (`make gate`) to verify everything.
+- **Deterministic demo** whose stage 5 prints the platform's core promise:
+  rows survive, PII doesn't, audit exists.
+
+## What was deliberately NOT built
+
+Honesty about scope is part of good design:
+
+- No multi-node anything (SQLite/DuckDB don't shard — documented swap paths
+  exist).
+- No ML fraud model — three interpretable rules demonstrate the streaming
+  architecture without pretending to be a risk stack.
+- No multi-tenant BI layer — Gold query API is the read interface.
+
+Each "missing" thing has a named interface where the real thing plugs in.
+
+Read next: [the build log](/deep-dives/build-log) or the
+[production playbook](/deep-dives/production-playbook).

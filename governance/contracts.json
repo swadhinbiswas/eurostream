@@ -1,0 +1,220 @@
+{
+  "order_placed": {
+    "schema_version": {
+      "name": "schema_version",
+      "type": "int",
+      "required": false
+    },
+    "event_id": {
+      "name": "event_id",
+      "type": "str",
+      "required": true
+    },
+    "event_type": {
+      "name": "event_type",
+      "type": "Literal['order_placed']",
+      "required": false
+    },
+    "occurred_at": {
+      "name": "occurred_at",
+      "type": "float",
+      "required": true
+    },
+    "order_id": {
+      "name": "order_id",
+      "type": "str",
+      "required": true
+    },
+    "customer_id": {
+      "name": "customer_id",
+      "type": "str",
+      "required": true
+    },
+    "email": {
+      "name": "email",
+      "type": "str",
+      "required": true
+    },
+    "iban": {
+      "name": "iban",
+      "type": "str",
+      "required": true
+    },
+    "country": {
+      "name": "country",
+      "type": "str",
+      "required": true
+    },
+    "amount_eur": {
+      "name": "amount_eur",
+      "type": "float",
+      "required": true
+    },
+    "marketing_consent": {
+      "name": "marketing_consent",
+      "type": "bool",
+      "required": true
+    },
+    "currency": {
+      "name": "currency",
+      "type": "str",
+      "required": false
+    }
+  },
+  "page_click": {
+    "schema_version": {
+      "name": "schema_version",
+      "type": "int",
+      "required": false
+    },
+    "event_id": {
+      "name": "event_id",
+      "type": "str",
+      "required": true
+    },
+    "event_type": {
+      "name": "event_type",
+      "type": "Literal['page_click']",
+      "required": false
+    },
+    "occurred_at": {
+      "name": "occurred_at",
+      "type": "float",
+      "required": true
+    },
+    "click_id": {
+      "name": "click_id",
+      "type": "str",
+      "required": true
+    },
+    "customer_id": {
+      "name": "customer_id",
+      "type": "str",
+      "required": true
+    },
+    "session_id": {
+      "name": "session_id",
+      "type": "str",
+      "required": true
+    },
+    "ip_address": {
+      "name": "ip_address",
+      "type": "str",
+      "required": true
+    },
+    "page": {
+      "name": "page",
+      "type": "str",
+      "required": true
+    },
+    "country": {
+      "name": "country",
+      "type": "str",
+      "required": true
+    }
+  },
+  "payment_processed": {
+    "schema_version": {
+      "name": "schema_version",
+      "type": "int",
+      "required": false
+    },
+    "event_id": {
+      "name": "event_id",
+      "type": "str",
+      "required": true
+    },
+    "event_type": {
+      "name": "event_type",
+      "type": "Literal['payment_processed']",
+      "required": false
+    },
+    "occurred_at": {
+      "name": "occurred_at",
+      "type": "float",
+      "required": true
+    },
+    "payment_id": {
+      "name": "payment_id",
+      "type": "str",
+      "required": true
+    },
+    "order_id": {
+      "name": "order_id",
+      "type": "str",
+      "required": true
+    },
+    "customer_id": {
+      "name": "customer_id",
+      "type": "str",
+      "required": true
+    },
+    "iban": {
+      "name": "iban",
+      "type": "str",
+      "required": true
+    },
+    "amount_eur": {
+      "name": "amount_eur",
+      "type": "float",
+      "required": true
+    },
+    "country": {
+      "name": "country",
+      "type": "str",
+      "required": true
+    },
+    "merchant_country": {
+      "name": "merchant_country",
+      "type": "str",
+      "required": true
+    },
+    "status": {
+      "name": "status",
+      "type": "Literal['authorized', 'declined', 'captured']",
+      "required": false
+    }
+  },
+  "erasure_requested": {
+    "schema_version": {
+      "name": "schema_version",
+      "type": "int",
+      "required": false
+    },
+    "event_id": {
+      "name": "event_id",
+      "type": "str",
+      "required": true
+    },
+    "event_type": {
+      "name": "event_type",
+      "type": "Literal['erasure_requested']",
+      "required": false
+    },
+    "occurred_at": {
+      "name": "occurred_at",
+      "type": "float",
+      "required": true
+    },
+    "request_id": {
+      "name": "request_id",
+      "type": "str",
+      "required": true
+    },
+    "customer_id": {
+      "name": "customer_id",
+      "type": "str",
+      "required": true
+    },
+    "reason": {
+      "name": "reason",
+      "type": "str",
+      "required": false
+    },
+    "requested_by": {
+      "name": "requested_by",
+      "type": "str",
+      "required": false
+    }
+  }
+}

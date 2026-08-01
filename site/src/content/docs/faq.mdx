@@ -1,0 +1,135 @@
+---
+title: "EuroStream FAQ — GDPR Data Engineering, Erasure Cascades & Medallion Architecture"
+description: "Answers to common questions about building GDPR-compliant data platforms — right-to-erasure implementation, medallion architecture, SQLite vs Kafka, DuckDB vs Snowflake, PII detection and schema contracts in CI."
+sidebar:
+  order: 3
+head:
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: |
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "How do you implement GDPR Article 17 (right to erasure) in a data platform?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Fan a deletion out through every layer in a fixed cascade: suppress the customer ID on the streaming path (in-memory set backed by a durable registry table), anonymize PII columns in Bronze while keeping the row for analytics continuity, delete Silver and Gold rows, purge derived fraud alerts, re-snapshot any exported lake copies, and write an append-only audit record with a truncated SHA-256 confirmation hash so a DSAR team can prove execution without exposing the subject."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Why use SQLite as an event bus instead of Kafka?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "For local development the goal is identical semantics with zero infrastructure: topics, partitions, per-consumer-group committed offsets and latest-by-default offset resets are all reproducible on SQLite with WAL mode. Application code depends only on Producer/Consumer interfaces, so production swaps to confluent-kafka by changing one environment variable — no application rewrite."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What is a medallion architecture and why is it useful for GDPR?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Bronze stores raw append-only events, Silver holds deduplicated typed entities with PII hashed using salted SHA-256, and Gold contains consent-aware business aggregates. The layers make governance enforceable: raw PII exists only in Bronze where it is anonymized on erasure, Silver is the last layer that sees personal data at all, Gold never touches it, and each rule can be checked by automated quality gates instead of documentation."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "How do you prevent unregistered PII from entering a warehouse?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "A pure-Python classifier scans Bronze samples using structural recognizers — email regex, IPv4 validation, phone patterns, and IBANs verified with the ISO 13616 mod-97 checksum so hex UUIDs are rejected. Findings are written to a machine-readable manifest; the pipeline DAG fails if a new PII-like column appears that is not registered, turning PII governance into a CI gate rather than a spreadsheet."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "How do you stop breaking schema changes from reaching downstream consumers?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Event models are pydantic contracts snapshotted into a committed JSON baseline. CI compares the current snapshot against the baseline and fails on backward-incompatible drift: removed required fields, required fields becoming optional, or type changes. Adding optional fields is allowed, which keeps producers free to evolve without coordinating releases."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Can this architecture scale to production traffic?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "The interfaces scale even though the local implementations do not: swap SQLite for Kafka via config, DuckDB for Snowflake or BigQuery since the SQL is standard, the DAG executor tasks for Airflow operators, and ship the audit JSONL to WORM storage. The local stack is deliberately single-node so the whole platform runs on a laptop with zero cloud spend."
+            }
+          }
+        ]
+      }
+---
+
+Frequently asked questions about EuroStream and the patterns it demonstrates.
+These mirror the questions interviewers actually ask.
+
+## Product & scope
+
+### Is EuroStream a production system?
+
+It is a **reference architecture that runs like one**. SQLite doesn't shard
+and DuckDB doesn't serve concurrent writers — by design. Every component
+hides behind the interface its production counterpart uses
+(`Producer`/`Consumer`, standard SQL, DAG tasks), so scaling is a wiring
+change. [The production playbook](/deep-dives/production-playbook) details
+exactly what you swap.
+
+### Why simulated sources instead of real APIs?
+
+Determinism and focus. Faker-generated EU data (IBANs, country codes,
+consent flags) makes the demo reproducible run-after-run, which is what makes
+the erasure verification trustworthy — and keeps the project about the
+platform, not about scraping credentials.
+
+## GDPR mechanics
+
+### How is Article 17 erasure proven?
+
+Every execution appends a JSONL record and a warehouse row containing the
+request ID, customer ID, layers touched, timestamps, status and
+`sha256(request_id:customer_id)[:16]`. The hash lets a DSAR team demonstrate
+a specific request executed against a specific subject **without** storing
+anything reversible.
+
+### What happens to rows in Bronze after erasure?
+
+They survive with every PII column replaced by `<anonymized>`. Deleting raw
+rows would destroy event history for analytics; anonymizing destroys the
+personal data while preserving the shape of the dataset. Silver and Gold rows
+for the subject are deleted outright because they're derived data.
+
+### How fast must erasure complete?
+
+Configurable via `EUROSTREAM_ERASURE_SLA_SECONDS` (default 60). Each
+execution records its latency into a histogram metric and increments an
+`erasure_sla_breach` counter when over SLA — SLAs you don't measure are
+marketing copy.
+
+## Implementation choices
+
+### Why pure Python instead of Spark/Flink?
+
+Because the *architecture* is the portfolio piece, not the cluster. Windowed
+rules map 1:1 to Spark Structured Streaming semantics (rolling windows,
+per-key state, watermark-ish expiry), so the port is mechanical. Running the
+same logic locally means every interview claim is verifiable on demand.
+
+### How does the fraud scorer avoid duplicate alerts?
+
+Each rule fires once per customer per window: velocity alerts exactly at
+`threshold + 1` payments, geo-mismatch only on the first mismatching payment
+in a window. Alert spam trains analysts to ignore alerts.
+
+### Where does the PII salt live?
+
+`EUROSTREAM_PII_SALT`, defaulting to a public dev value. Production loads it
+from a secret manager — and rotating it invalidates existing Silver hashes,
+which is why both hashing implementations (SQL and Python) share one scheme
+with a test pinning them together.
+
+Still curious? [Ask via GitHub](https://github.com/swadhin/eurostream/issues)
+or read the [trade-off cheatsheet](/interview/tradeoffs-cheatsheet).

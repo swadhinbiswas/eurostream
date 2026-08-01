@@ -1,0 +1,37 @@
+/* EuroStream Cookbook — brand layer over Starlight's default theme. */
+
+:root {
+  --sl-color-accent-low: #0c2a33;
+  --sl-color-accent: #14b8a6;
+  --sl-color-accent-high: #b8f5ec;
+  --sl-color-white: #f4fbfa;
+  --sl-color-gray-1: #e7efee;
+  --sl-color-gray-2: #c3d4d2;
+  --sl-color-gray-3: #8aa3a0;
+  --sl-color-gray-4: #4d6663;
+  --sl-color-gray-5: #24393a;
+  --sl-color-gray-6: #16282a;
+  --sl-color-black: #0a1617;
+}
+
+:root[data-theme="light"] {
+  --sl-color-accent-low: #d8f3ef;
+  --sl-color-accent: #0d9488;
+  --sl-color-accent-high: #0f5f57;
+}
+
+.hero > .hero-copy h1,
+h1 {
+  letter-spacing: -0.02em;
+}
+
+/* Code excerpts are the stars of this site — give them room to breathe. */
+.sl-markdown-content pre {
+  border-radius: 0.5rem;
+  padding-block: 1rem;
+}
+
+/* Slightly tighter callout typography for dense technical notes. */
+.starlight-aside-content {
+  font-size: var(--sl-text-sm);
+}

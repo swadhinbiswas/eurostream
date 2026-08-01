@@ -1,0 +1,114 @@
+---
+title: "Build Log — How EuroStream Was Actually Built (Including the Bugs)"
+description: "The real construction order of a GDPR-compliant analytics platform — vertical slice first, contracts before consumers — and the genuine bugs found along the way, from dead fraud rules to stale schema baselines."
+sidebar:
+  order: 2
+---
+
+This is the honest record of how the platform was built: the order of work,
+the decisions that got revised, and the bugs that shipped *into the working
+tree* and were caught. If you're building something similar, this is the
+sequence that worked.
+
+## Phase 0 — Contracts first (half a day)
+
+Before any pipeline code: the event models (`models.py`), because every other
+module consumes them. `Event` base with `schema_version`, four event types,
+`EVENT_MODELS` registry, `build_event()`.
+
+**Why first:** types are the cheapest thing to change now and the most
+expensive thing to change later. The contract registry
+([recipe 6](/cookbook/schema-contracts-ci)) was built in the same phase so
+the baseline habit existed from commit one.
+
+## Phase 1 — Transport + a walking skeleton
+
+1. `Producer`/`Consumer` ABCs and `Record`
+2. SQLite log with topics/offsets/consumer groups (WAL mode)
+3. Faker-based EU source generators (IBANs, country codes, consent flags)
+4. CLI `produce` command
+
+At this point events flowed onto a durable log. Nothing else existed yet, but
+the skeleton walked.
+
+## Phase 2 — Both processing paths
+
+- **Speed path**: windowed `FraudScorer` + `FraudStreamProcessor` bridging
+  bus → rules → alerts topic ([recipe 2](/cookbook/streaming-fraud-scoring))
+- **Batch path**: DuckDB warehouse DDL for Bronze/Silver/Gold +
+  `load_bronze_from_records` + SQL transforms
+  ([recipe 3](/cookbook/medallion-warehouse))
+
+The DAG executor came next (~90 lines: topological sort, cycle detection,
+retries) because transforms needed ordering immediately and Airflow was
+explicitly out of scope locally.
+
+## Phase 3 — Governance (the differentiator)
+
+1. PII recognizers with mod-97 IBAN validation; manifest build/gate
+2. Erasure cascade: tombstone → suppression → anonymize/delete → audit
+3. Quality gates wired as the DAG's final task
+4. FastAPI governance surface + metrics sink
+
+## Phase 4 — Hardening pass
+
+What "done" required beyond working features:
+
+- Suppression registry made **durable** (table-backed), wired into both CLI
+  paths — until then it was an in-memory set no other process could see
+- One hash scheme shared by SQL and Python, pinned by a test
+- Lake export added with the erasure-replay guarantee
+- Kafka adapter fixed to carry headers and real offsets
+- WAL checkpointing implemented (the parameter existed but did nothing)
+- Multi-stage Dockerfile, non-root user, healthcheck, container smoke test in CI
+- `.env.example`, Makefile, LICENSE, SECURITY.md, CONTRIBUTING.md
+
+## The bugs that were actually found (and what each taught)
+
+### 1. Dead fraud rule (caught by tests)
+`stats.geo_mismatch = True` ran eagerly at scoring time, and the alert was
+guarded by `if not stats.geo_mismatch`. Result: GEO_MISMATCH could **never**
+fire while all code looked plausible. `test_geo_mismatch_rule_fires` failed
+immediately once run against the tree.
+*Lesson: rule-to-test mapping isn't bureaucracy; it's the only thing standing
+between you and silently dead product behavior.*
+
+### 2. A contract baseline nobody could regenerate
+The committed `contracts.json` contained `PydanticUndefinedType` strings —
+output of a buggy serializer. It was consistent garbage. A serializer rewrite
+surfaced 30 phantom breaking changes.
+*Lesson: if a governance artifact can't be regenerated from source, it's
+tech debt wearing a compliance costume.*
+
+### 3. Split identity on erasure requests
+When `request_id=None`, `event_id` and `request_id` each generated their own
+UUID — one request, two identities across tombstone and audit.
+*Lesson: identity fields deserve explicit single-generation points.*
+
+### 4. Tautological quality gate
+The consent check compared Gold's copied flag against itself — structurally
+unable to fail, therefore worthless.
+*Lesson: prove every guard fails by corrupting state in its test.*
+
+### 5. Container wrote into site-packages
+Default storage paths derived from module location landed in read-only
+`site-packages` inside the image. Fixed by falling back to CWD when the
+package isn't a source checkout; caught by the Docker smoke test in CI.
+*Lesson: "works locally" includes "works in the artifact you'll deploy".*
+
+### 6. Suppression theater
+The README claimed streaming stops emitting alerts after erasure — but the
+CLI passed `lambda cid: False`. Documentation described a system that didn't
+exist yet.
+*Lesson: never let docs outrun code, or wire the code to catch up fast.*
+
+## Tooling that paid for itself
+
+- **uv**: reproducible envs, sub-second syncs
+- **ruff + mypy strict**: the duplicate-import and Any-return issues died at
+  lint time, pre-review
+- **pytest fixtures per component** (`bus`, `warehouse`, `metrics`,
+  `make_payment`): new tests are three lines
+- **Makefile gate**: one command between me and self-deception
+
+Read next: [production playbook](/deep-dives/production-playbook).

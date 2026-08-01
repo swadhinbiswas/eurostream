@@ -1,0 +1,19 @@
+{
+  "name": "eurostream-docs",
+  "type": "module",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The EuroStream Cookbook — how a GDPR-compliant real-time analytics platform is built, why every decision was made, and how to defend it in an interview.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/rss": "^4.0.11",
+    "@astrojs/sitemap": "^3.2.1",
+    "@astrojs/starlight": "^0.41.7",
+    "astro": "^7.2.4"
+  }
+}

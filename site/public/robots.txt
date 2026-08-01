@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://eurostream-docs.pages.dev/sitemap-index.xml

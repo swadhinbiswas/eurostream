@@ -1,0 +1,150 @@
+---
+title: "EuroStream Interview Questions & Answers — GDPR Data Engineering"
+description: "Real interview questions about this GDPR-compliant streaming platform with strong answers — event bus design, erasure cascades, medallion trade-offs, PII detection, schema evolution and scaling strategy."
+sidebar:
+  order: 2
+head:
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: |
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "Walk me through what happens after an erasure request arrives.",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "The API enqueues a tombstone on the erasure topic with a single request identity. A worker executes a fixed cascade: add the customer to the suppression registry (in-memory set plus durable table), anonymize PII columns in Bronze, delete Silver and Gold rows, purge fraud alerts, re-snapshot the Parquet lake via the completion hook, then append an audit record containing sha256(request_id:customer_id) truncated to 16 hex chars. Latency is observed into a histogram against a 60 second SLA."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Why is Bronze anonymized instead of deleted during erasure?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Bronze is the raw append-only capture layer. Deleting rows destroys event history and breaks analytics continuity; replacing every PII column with an anonymization marker destroys the personal data while preserving dataset shape, so downstream counts stay meaningful. Silver and Gold are derived data and are deleted outright."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "How would you scale this platform to real production traffic?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Component swaps behind unchanged interfaces: SQLite bus to Kafka via one environment variable since Producer/Consumer semantics match, DuckDB to Snowflake or BigQuery because the transform SQL is standard, local DAG tasks wrapped as Airflow operators, JSONL audit shipped to S3 Object Lock for WORM retention, Prometheus scraping the existing metrics renderer. The fraud scorer's window state moves to Kafka Streams or Flink when the stream path needs multiple replicas."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What makes your PII detector better than regex matching?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "IBANs are validated with the ISO 13616 mod-97 checksum after length checks per country, so hex UUIDs and other look-alikes that satisfy naive country-prefixed regexes are rejected. Emails use fullmatch, IPv4 values pass ipaddress validation on top of the pattern, and column classification requires a majority vote across samples rather than a single hit."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "How do you handle breaking changes to event schemas?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Event models snapshot into a committed JSON baseline. CI fails on backward-incompatible drift — removed required fields, required becoming optional, or type changes including Literal discriminator renames. Adding optional fields is always allowed so producers evolve freely. Regenerating the baseline is a deliberate act whose commit message documents why the break is acceptable."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Tell me about a bug you found while building this.",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "The geo-mismatch fraud rule was dead code: a flag was set eagerly at scoring time and the alert was guarded by checking that same flag was false, which could never be true. Every line looked plausible until its dedicated test failed immediately. The lesson baked into the project is rule-to-test mapping — every guarantee gets a named test that has demonstrably failed at least once."
+            }
+          }
+        ]
+      }
+---
+
+Hard questions interviewers ask about this kind of system — with answers that
+demonstrate depth instead of memorized buzzwords.
+
+## Architecture
+
+### "Why Lambda and not Kappa?"
+
+> Kappa serves everything off the log by reprocessing. I kept two paths
+> because the SLAs differ by orders of magnitude: fraud needs seconds on
+> partial data, reporting needs completeness on all data. Both read the same
+> log, so replay exists anyway — if the speed path ever becomes fully
+> derivable from batch output, collapsing to Kappa is a simplification I've
+> already isolated behind interfaces.
+
+### "Why not just Postgres for everything?"
+
+> The log needs append-only semantics with per-consumer offsets — Postgres
+> can fake it but you end up rebuilding broker tables and vacuum tuning.
+> DuckDB beats Postgres at analytical scans (columnar, vectorized) which is
+> 95% of this workload. The write path is append-heavy, the read path is
+> scan-heavy; neither wants row-store OLTP machinery.
+
+### "What breaks first under load?"
+
+> Three things in order: SQLite's single writer (~1k events/s ceiling),
+> DuckDB's no-concurrent-writers model (second pipeline process), and
+> per-process window state when the stream path scales past one replica.
+> Each maps to a named swap — MSK/Kafka, Snowflake, Flink windows — with no
+> application rewrite, which is the whole point of the interface layer.
+
+## GDPR mechanics
+
+### "Walk me through an erasure request end to end."
+
+> Tombstone lands on `erasure_requests` with one identity for event_id and
+> request_id. Worker executes in order: suppression registry first —
+> in-memory set plus durable table so other processes see it — then Bronze
+> PII columns become `<anonymized>` (rows survive for analytics shape),
+> Silver customers/orders/payments deleted, Gold aggregates deleted, fraud
+> alerts purged, lake re-snapshotted through the completion hook, and an
+> audit record written with `sha256(request_id:customer_id)[:16]`. Latency
+> goes into a histogram; breaches increment a counter against the 60-second
+> SLA.
+
+### "Why keep Bronze rows at all?"
+
+> Article 17 requires erasure of personal data, not destruction of event
+> history. Anonymizing preserves referential shape — counts still make sense
+> — while the personal data is unrecoverable. It also keeps the audit story
+> clean: we can show *what* happened to the subject's records.
+
+### "How do you know erasure actually completed everywhere?"
+
+> Two mechanisms: verification queries in the demo assert zero Gold rows,
+> exactly one audit entry, and anonymized Bronze; and tests pin the cascade
+> contract including restart behavior — a fresh service seeds its suppression
+> set from the durable table, proving cross-process guarantees.
+
+## Implementation judgment
+
+### "Your fraud rules aren't ML — is that a weakness?"
+
+> Deliberate scope. The rules demonstrate the streaming architecture with
+> interpretable features (velocity, z-score, geo). The upgrade path is a
+> gradient-boosted model consuming the same per-key features the scorer
+> already maintains — the architecture doesn't change, only the scoring
+> function does. For interviews, three rules you can defend beat one model
+> you can't explain.
+
+### "How do you test a quality gate that copies a flag?"
+
+> You don't trust it — you falsify it. My first consent check was
+> tautological: Gold mirrors `marketing_consent` into `consents_marketing`,
+> so comparing them could never fail. The fix checks mirror integrity both
+> directions, and the test deliberately corrupts Gold and asserts the gate
+> trips. A guard you've never seen fail is decoration.
+
+### "What would you build next?"
+
+> Priority order: WORM sink for audit JSONL (legal defensibility), API auth
+> via gateway integration, then stream-path state externalization if scale
+> demands replicas. Each is bounded by an interface that already exists.
+
+For rapid review, see the [trade-offs cheatsheet](/interview/tradeoffs-cheatsheet).

@@ -1,0 +1,124 @@
+---
+title: "Recipe 2 — Streaming Fraud Scoring: Windowed Rules Without Spark"
+description: "Implement rolling-window fraud detection (velocity, amount z-score, geo mismatch) in pure Python with per-key state, once-per-window alerting and GDPR suppression gating — a direct port of Spark Structured Streaming semantics."
+sidebar:
+  order: 3
+---
+
+## Problem
+
+Payments need fraud checks within seconds, not batch cycles. The classic
+answer is Spark Structured Streaming or Flink — a JVM cluster for three
+rules. The real requirement is smaller: **per-key rolling windows over an
+event stream with bounded state**. That is implementable in pure Python if
+you keep the semantics honest.
+
+## Why this way
+
+| Option | Verdict |
+|---|---|
+| Spark/Flink streaming | Correct but heavy; kills laptop portability |
+| Batch scoring every N minutes | Misses the "within seconds" requirement |
+| **Pure-Python windowed scorer with the same state model** | ✅ Portable; maps 1:1 to Spark semantics when scale demands |
+
+Three rules cover the canonical fraud surface:
+
+- **VELOCITY** — more than *k* payments by one customer inside one window
+- **AMOUNT_ZSCORE** — payment deviates > nσ from the customer's own history
+- **GEO_MISMATCH** — billing country ≠ merchant country
+
+## The recipe
+
+### 1. Per-key window state
+
+```python
+@dataclass
+class WindowStats:
+    count: int = 0
+    amount_sum: float = 0.0
+    geo_mismatch: bool = False
+```
+
+Windows are keyed by `(customer_id)` and bucketed by epoch:
+
+```python
+def _window_key(self, ts: float) -> tuple[int, int]:
+    start = int(ts // self._window_seconds) * self._window_seconds
+    return start, start + self._window_seconds
+```
+
+This is tumbling-window semantics — the same partitioning Spark does.
+
+### 2. Velocity: fire exactly once
+
+```python
+if stats.count == self._velocity_threshold + 1:
+    alerts.append(FraudAlert(rule="VELOCITY", severity="HIGH", ...))
+```
+
+`==` not `>` — the 6th payment alerts, the 7th doesn't. Alert spam trains
+analysts to ignore dashboards; **once-per-window-per-rule** is the policy.
+
+### 3. Amount z-score against personal history
+
+```python
+amounts = list(history)                      # bounded deque(maxlen=200)
+if len(amounts) >= 3:
+    mean = sum(amounts) / len(amounts)
+    std = math.sqrt(sum((a - mean) ** 2 for a in amounts) / len(amounts))
+    if std > 0 and abs(payment.amount_eur - mean) / std > self._amount_zscore:
+        alerts.append(FraudAlert(rule="AMOUNT_ZSCORE", ...))
+```
+
+The `maxlen=200` deque bounds memory per customer forever; `expire()` drops
+whole customers inactive for a window so the state map cannot grow unbounded
+— the poor engineer's watermark.
+
+### 4. Geo mismatch: set the flag where it's checked
+
+```python
+if payment.country != payment.merchant_country:
+    if not stats.geo_mismatch:          # first mismatch in this window only
+        alerts.append(FraudAlert(rule="GEO_MISMATCH", ...))
+    stats.geo_mismatch = True
+```
+
+A real bug lived here during development: the flag was also set eagerly at
+the top of `score()`, making the guard always-true and the rule dead code.
+The test `test_geo_mismatch_rule_fires` caught it immediately — which is why
+[rule-to-test mapping](/cookbook/quality-gates-testing) matters more than any
+single implementation detail.
+
+### 5. The processor: bus → scorer → alerts, with a governance hook
+
+```python
+class FraudStreamProcessor:
+    def __init__(self, consumer, scorer, metrics, output_producer=None,
+                 on_alert=None, suppression_check=None):
+        self._suppression_check = suppression_check or (lambda cid: False)
+
+    def run(self, poll_timeout=0.2, max_events=None, idle_stop=5):
+        ...
+        if self._suppression_check(payment.customer_id):
+            self._metrics.incr("suppressed_for_erasure")
+            continue                      # erased customer → never scored
+        alerts = self._scorer.score(payment)
+        ...
+```
+
+`suppression_check` is wired to the erasure service's registry, so Article 17
+stops new derived data at the *ingestion* of the stream path — before alerts,
+before aggregates.
+
+## Gotchas & tips
+
+- **State expiry is part of correctness**, not cleanup. Without `expire()`
+  the windows dict leaks per customer.
+- **Score exactly one event per `score()` call.** Batching hides which event
+  triggered which alert and complicates tests.
+- **Metrics belong to the processor**, not reached through private scorer
+  internals — inject `Metrics`; it keeps components substitutable.
+- **Tip:** keep rule thresholds in `Settings` (`EUROSTREAM_FRAUD_*`). Tuning
+  thresholds should never be a code change.
+
+Read next: [the medallion warehouse](/cookbook/medallion-warehouse).

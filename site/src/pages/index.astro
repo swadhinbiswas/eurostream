@@ -1,0 +1,143 @@
+---
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+
+const frontmatter = {
+  title: "EuroStream — Build a GDPR-Compliant Real-Time Analytics Platform in Pure Python",
+  description:
+    "The engineering cookbook behind EuroStream — streaming fraud detection, a medallion warehouse, PII governance and a working GDPR Article 17 erasure cascade. Recipes, architecture decisions, production playbook and interview prep.",
+  template: "splash" as const,
+  hero: {
+    title: "Build a GDPR-compliant real-time analytics platform",
+    tagline:
+      "The complete engineering cookbook behind EuroStream — event streaming, medallion warehouse, PII governance, and a right-to-erasure cascade that actually works. Every recipe explains the problem, the decision, the code, and the trade-offs.",
+    actions: [
+      { text: "Read the Cookbook", link: "/cookbook/", variant: "primary" },
+      {
+        text: "Why this architecture wins",
+        link: "/deep-dives/why-this-architecture",
+        variant: "minimal",
+      },
+    ],
+  },
+};
+---
+
+<StarlightPage frontmatter={frontmatter}>
+  <div class="sl-container landing">
+    <section class="landing-intro">
+      <p>
+        Most demo pipelines stop at <em>Kafka → warehouse</em>. In the EU that
+        is not enough: <strong>GDPR Article 17</strong> doesn't care how fast
+        your pipeline is if you can't prove you deleted someone's data when
+        they asked. EuroStream is the missing half — the governed data platform
+        — built end-to-end in pure Python.
+      </p>
+    </section>
+
+    <section class="landing-section">
+      <h2>What you get from this cookbook</h2>
+      <ol>
+        <li>
+          <strong>A working platform you can run on a laptop.</strong> Zero
+          Docker for local dev, zero JVM, zero cloud spend.
+          <code>uv run eurostream demo</code> executes the full loop: ingest →
+          fraud scoring → medallion transform → erasure → verified audit.
+        </li>
+        <li>
+          <strong>Eight recipes that each solve one hard problem properly</strong>
+          — durable event logs without Kafka, windowed fraud rules without
+          Spark, erasure cascades with tamper-evident audits, schema contracts
+          enforced in CI.
+        </li>
+        <li>
+          <strong>Decision records, not just code.</strong> Every chapter
+          answers <em>why this way</em>, <em>what was rejected</em>, and{" "}
+          <em>what changes at scale</em>.
+        </li>
+        <li>
+          <strong>Interview-grade understanding.</strong> A dedicated prep
+          section with an elevator pitch, likely questions with strong answers,
+          and honest trade-off sheets.
+        </li>
+      </ol>
+    </section>
+
+    <section class="landing-section">
+      <h2>The platform in one diagram</h2>
+      <pre><code>{` Source systems (simulated, pure Python)
+      |  orders · clicks · payments
+      v
+ Event bus (durable append-only log; Kafka adapter for deployment)
+      |
+      +--------------> Streaming path (FraudScorer, windowed rules)
+      |                     | fraud_alerts
+      |                     v
+      |               Live alerts + metrics (JSONL)
+      v
+ Medallion warehouse (DuckDB)
+      Bronze (raw, append) --> PII classifier + manifest --> Silver (dedup,
+      typed, PII-hashed) --> Gold (customer_360, order_facts, fraud_summary)
+      |
+      v
+ Governance: erasure service + audit log + quality gate + Parquet lake`}</code></pre>
+    </section>
+
+    <section class="landing-section">
+      <h2>Run it in sixty seconds</h2>
+      <pre><code class="language-bash">{`git clone https://github.com/swadhin/eurostream && cd eurostream
+uv sync
+uv run eurostream demo`}</code></pre>
+      <p>
+        The demo is deterministic — it resets its data directory first — so you
+        can run it repeatedly and diff the results. Stage 5 of the output is
+        the point:
+      </p>
+      <pre><code>{`5/6 verifying cascade...
+  bronze PII anonymized rows: 60 (before: 60 clear-text)
+  gold customer_360 rows remaining: 0 (expect 0)
+  audit log entries: 1 (expect 1)
+  verification: PASSED`}</code></pre>
+    </section>
+
+    <section class="landing-section">
+      <h2>Who this is for</h2>
+      <ul>
+        <li>
+          <strong>Data / platform engineers</strong> who need GDPR-era
+          governance patterns beyond "we have a retention policy".
+        </li>
+        <li>
+          <strong>Backend engineers</strong> building event-driven systems who
+          want the bus, contracts and quality-gate mechanics without a Kafka
+          cluster.
+        </li>
+        <li>
+          <strong>Candidates preparing for interviews</strong> — every design
+          decision here is a story: constraint → options → decision →
+          consequence.
+        </li>
+      </ul>
+    </section>
+  </div>
+</StarlightPage>
+
+<style>
+  .landing {
+    max-width: 60rem;
+    margin-inline: auto;
+  }
+  .landing-intro {
+    font-size: 1.15rem;
+    color: var(--sl-color-gray-2);
+    border-inline-start: 3px solid var(--sl-color-accent);
+    padding-inline-start: 1rem;
+    margin-block: 0 2rem;
+  }
+  .landing-section {
+    margin-block-end: 2.5rem;
+  }
+  .landing-section h2 {
+    font-size: 1.35rem;
+    margin-block-end: 0.75rem;
+  }
+</style>

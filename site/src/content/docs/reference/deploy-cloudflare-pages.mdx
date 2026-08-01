@@ -1,0 +1,86 @@
+---
+title: "Deploying This Astro Docs Site to Cloudflare Pages"
+description: "How the EuroStream cookbook is built and deployed — Astro static output to Cloudflare Pages with wrangler, security headers, immutable asset caching, custom domains and CI deployment options."
+sidebar:
+  order: 3
+---
+
+This site is a static [Astro](https://astro.build) build using the
+[Starlight](https://starlight.astro.build) docs theme. Static output is ideal
+for Cloudflare Pages: every page is pre-rendered HTML, so it's fast and fully
+crawlable (good for SEO), with zero server cost.
+
+## One-time setup
+
+```bash
+cd site
+npm install
+npm run dev        # http://localhost:4321
+```
+
+## Deploy option A — Git integration (recommended)
+
+1. Push the repo to GitHub.
+2. In Cloudflare → Workers & Pages → Create → Pages → **Connect to Git**.
+3. Build settings:
+   - Framework preset: **Astro**
+   - Build command: `npm run build`
+   - Build output directory: `dist`
+   - Root directory: `site`
+4. Save. Every push deploys; PRs get preview URLs.
+
+## Deploy option B — Wrangler direct upload
+
+```bash
+cd site
+npm run build
+./deploy.sh                 # production
+./deploy.sh --branch staging # preview branch
+```
+
+`deploy.sh` wraps `wrangler pages deploy dist --project-name eurostream-docs`.
+
+## Canonical URL
+
+`astro.config.mjs` reads `SITE_URL` (default
+`https://eurostream-docs.pages.dev`). Set a custom domain:
+
+```bash
+SITE_URL=https://your-domain.example npm run build
+```
+
+Canonical links, OG URLs and the sitemap all follow that one variable.
+
+## SEO machinery shipped here
+
+| Piece | Where |
+|---|---|
+| `sitemap-index.xml` | `@astrojs/sitemap`, enabled in config |
+| `robots.txt` referencing sitemap | `public/robots.txt` |
+| Per-page title + meta description | Starlight frontmatter on every page |
+| Open Graph + Twitter tags | Starlight defaults + per-page overrides |
+| JSON-LD `WebSite`/`Organization` | build-time injection into `index.html` |
+| JSON-LD `FAQPage` | FAQ and interview Q&A pages |
+| Canonical `<link>` | automatic once `site` is set |
+| Keyword-led slugs | `/cookbook/gdpr-erasure-cascade`, not `/page4` |
+
+## Headers & caching (`public/_headers`)
+
+```
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
+```
+
+Astro fingerprints `/_astro/*` assets, so they're safe to cache immutably;
+HTML stays short-lived.
+
+## CI
+
+The repo's GitHub Actions includes a `docs` job that runs `npm ci && npm run
+build` on every PR — broken docs fail CI like broken code.

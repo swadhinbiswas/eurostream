@@ -1,0 +1,64 @@
+---
+title: "Trade-offs Cheatsheet — Every Decision, Its Alternative and Its Cost"
+description: "A rapid-review table of every engineering trade-off in the EuroStream platform — decision vs alternative vs cost vs when to reverse — for interview prep and design reviews."
+sidebar:
+  order: 3
+---
+
+One table to review the night before an interview. Each row: what was chosen,
+what was rejected, what the choice costs, and the signal that says "reverse
+it now".
+
+## Transport & processing
+
+| Decision | Alternative | Cost of the choice | Reverse when |
+|---|---|---|---|
+| SQLite WAL log as bus | Kafka/Redpanda from day one | Single writer; ~1k events/s ceiling | Sustained multi-host producers or >1k ev/s |
+| `Producer`/`Consumer` ABCs | Direct client usage | Thin adapter layer to maintain | — (never; this is load-bearing) |
+| Tumbling windows per customer | Sliding/session windows | Misses cross-window velocity patterns | Fraud team demands session semantics |
+| Rules-based scoring (velocity/z-score/geo) | Gradient-boosted model | Lower recall on subtle fraud | Labeled outcome data exists |
+| Once-per-window-per-rule alerts | Alert on every matching event | Possible missed repeats | Analyst feedback says gaps hurt triage |
+
+## Warehouse & modeling
+
+| Decision | Alternative | Cost | Reverse when |
+|---|---|---|---|
+| DuckDB file warehouse | Snowflake/Postgres | No concurrent writers; single node | Second writer process exists |
+| Full-rebuild transforms (`DELETE`+`INSERT`) | Incremental MERGE | Recompute cost at scale | Bronze >~10⁷ rows per cycle |
+| `row_number()` dedup, first-write-wins | Last-write-wins | Late corrections need reprocessing | Sources emit correction events |
+| `bool_and(marketing_consent)` | Latest-flag-wins | One opt-out event wins forever | Legal guidance says otherwise |
+| Salted SHA-256 PII hashes | Deterministic encryption / token vault | Hashes can't join across salt rotations | Cross-system identity joins needed → vault |
+| Mirror flag in Gold (`consents_marketing`) | Compute at read time | Duplicate column to keep honest | — (the DQ gate keeps it honest) |
+
+## Governance
+
+| Decision | Alternative | Cost | Reverse when |
+|---|---|---|---|
+| Bronze anonymized, not deleted, on erasure | Delete raw rows | Anonymization marker rows persist | Analytics no longer needs row shape |
+| Suppression registry: memory + durable table | Re-read tombstones on start | Two sources to seed from | Worker restart cost becomes dominant |
+| Audit hash `sha256(rid:cid)[:16]` | Full audit with raw IDs | Truncation collision risk (negligible at DSAR volumes) | External auditor requests longer proofs |
+| Erasure via tombstone + worker | Synchronous API deletion | Eventual consistency window | Regulator requires synchronous confirmation |
+| Lake excludes Bronze entirely | Export everything | Consumers can't access raw events | Build a governed raw-access product |
+| Manifest gate fails the DAG | Warn-only mode | Pipeline halts on unregistered PII | Never — fail closed is the point |
+| Contract baseline committed to repo | External schema registry service | Manual regeneration step | Multi-team producers coordinate through a real registry |
+
+## Testing & delivery
+
+| Decision | Alternative | Cost | Reverse when |
+|---|---|---|---|
+| 26 guarantee-mapped tests | Property-based/fuzz suite | Hand-written coverage only | Logic grows beyond rule clarity |
+| mypy strict + ruff (lint/format) | Typeless + review-only | Upfront annotation effort | — (never) |
+| Docker smoke runs full demo in CI | Unit tests only | ~1 min CI time | — (it caught a real packaging bug) |
+| Deterministic demo (wipes data dir) | Persistent dev environment | No long-lived local state | Building interactive tooling |
+| Static Astro docs on Cloudflare Pages | Docs-as-code in README only | Separate site pipeline | — (SEO + readability win outright) |
+
+## The meta-principles (if you remember nothing else)
+
+1. **Interfaces where production will land** — swaps are config, not rewrites.
+2. **Governance that can't fail loudly is decoration** — every gate has a
+   negative test.
+3. **One source of truth per concept** — one hash scheme, one request
+   identity, one contract baseline.
+4. **Determinism is a feature** — reproducible demos make claims verifiable.
+5. **Document reality, then catch code up fast** — never let docs outrun the
+   system ([it happened](/deep-dives/build-log); it got fixed).

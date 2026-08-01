@@ -1,0 +1,130 @@
+---
+title: "Recipe 3 — Medallion Warehouse: Bronze → Silver → Gold Transforms in DuckDB"
+description: "Implement medallion architecture transforms with pure SQL — deduplication via row_number, salted SHA-256 PII hashing, consent-aware customer 360 aggregation — plus a Parquet lake export that never leaks raw PII."
+sidebar:
+  order: 4
+---
+
+## Problem
+
+Raw events are duplicated, untyped and full of personal data. Analytics needs
+deduplicated entities, hashed identities, and aggregates that respect consent
+— all inspectable, all rebuildable. The medallion pattern organizes this, but
+the value is in the **transform contracts between layers**.
+
+## Why this way
+
+| Option | Verdict |
+|---|---|
+| Pandas transforms | Silent type coercion; memory-bound; hard to audit row-by-row |
+| ORM models | Row-at-a-time writes; the warehouse should do set operations |
+| **Declarative SQL on DuckDB** | ✅ Auditable, portable to Snowflake/BigQuery nearly verbatim |
+
+Layer policy is the governance story:
+
+| Layer | Content | PII policy |
+|---|---|---|
+| Bronze | Raw events exactly as ingested | Clear text — anonymized on erasure |
+| Silver | Dedup + typed + `row_number` natural keys | Salted SHA-256 hashes only |
+| Gold | Aggregates (customer_360, facts) | Never sees PII |
+
+## The recipe
+
+### 1. Silver customers: dedup + hash in one statement
+
+```sql
+INSERT INTO silver.customers (customer_id, email_hash, iban_hash, name_hash,
+                              country, marketing_consent, first_seen, last_seen)
+SELECT
+    customer_id,
+    sha256('{salt}:' || any_value(email)) as email_hash,
+    sha256('{salt}:' || any_value(iban)) as iban_hash,
+    NULL as name_hash,
+    min(country),
+    bool_and(marketing_consent),
+    min(occurred_at), max(occurred_at)
+FROM bronze.orders
+GROUP BY customer_id;
+```
+
+Three things worth copying:
+
+- **`sha256(salt || ':' || value)` matches `hash_pii()` byte-for-byte** — one
+  scheme across SQL and Python, pinned by a test
+  (`test_silver_hashes_match_hash_pii_scheme`). Two "equivalent" schemes is
+  how cross-system joins silently rot.
+- **DuckDB's `sha256()` returns the hex digest**, identical to Python's
+  hashlib for the same bytes.
+- **`bool_and(marketing_consent)`** — consent is AND-ed so a single opt-out
+  event marks the customer opted out.
+
+### 2. Deduplication with `row_number` on the natural key
+
+```sql
+INSERT INTO silver.orders (order_id, customer_id, amount_eur, country,
+                           occurred_at, dedup_count)
+SELECT order_id, customer_id, amount_eur, country, occurred_at, 1
+FROM (
+    SELECT *, row_number() OVER (PARTITION BY order_id ORDER BY occurred_at) rn
+    FROM bronze.orders
+) WHERE rn = 1;
+```
+
+First-write-wins by event time; the pattern generalizes by swapping the
+partition key.
+
+### 3. Gold: consent-aware Customer 360
+
+```sql
+SELECT
+    c.customer_id,
+    COUNT(DISTINCT o.order_id) as total_orders,
+    COALESCE(SUM(o.amount_eur), 0) as total_spend_eur,
+    COALESCE(AVG(o.amount_eur), 0) as avg_order_value_eur,
+    c.marketing_consent,
+    COALESCE(f.fraud_flag, FALSE) as fraud_flag,
+    c.last_seen,
+    c.marketing_consent as consents_marketing
+FROM silver.customers c
+LEFT JOIN silver.orders o ON c.customer_id = o.customer_id
+LEFT JOIN (SELECT customer_id, COUNT(*) > 0 as fraud_flag
+           FROM bronze.fraud_alerts GROUP BY customer_id) f ...
+```
+
+`consents_marketing` mirrors the source flag **deliberately** — the
+[consent quality gate](/cookbook/quality-gates-testing) verifies the mirror
+never lies, so marketing tooling can filter on one column safely.
+
+### 4. Lake export that can't bypass erasure
+
+```python
+LAKE_EXPORT_TABLES = (
+    "silver.customers", "silver.orders", "silver.payments",
+    "gold.customer_360", "gold.order_facts", "gold.fraud_summary",
+)
+
+def export_lake(self, lake_root: Path) -> list[Path]:
+    for table in self.LAKE_EXPORT_TABLES:
+        schema, name = table.split(".")
+        out = lake_root / schema / f"{name}.parquet"
+        self.conn.execute(f"COPY {table} TO '{out}' (FORMAT PARQUET)")
+```
+
+- Bronze is **never exported** — raw PII doesn't leave the governed boundary.
+- The erasure service re-snapshots the lake via its completion hook, so a
+  deleted customer can't survive a stale copy.
+
+## Gotchas & tips
+
+- **Idempotent rebuilds**: every build deletes then inserts (`DELETE FROM silver...;
+  INSERT ...`). A transform you can't re-run safely isn't a transform, it's a
+  liability.
+- **Escape interpolated SQL values** even when they're operator config (the
+  salt): `salt.replace("'", "''")`.
+- **Keep DDL next to the transforms** that consume each table — schema drift
+  is discovered at build time, not at query time.
+- **Tip:** DuckDB's single-file warehouse makes "the database" an artifact you
+  can copy, diff, and attach read-only elsewhere — free reproducibility for
+  demos and tests.
+
+Read next: [the GDPR erasure cascade](/cookbook/gdpr-erasure-cascade).

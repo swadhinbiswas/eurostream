@@ -1,0 +1,117 @@
+---
+title: "Recipe 7 — Data Quality Gates & a Test Suite That Maps to Guarantees"
+description: "Build DAG-failing data quality checks (uniqueness, referential integrity, PII-not-clear, consent mirror integrity) and a 44-test suite where every test maps to a platform guarantee — including SQL-vs-Python hash parity."
+sidebar:
+  order: 8
+---
+
+## Problem
+
+Pipelines that "succeed" can still produce garbage: duplicate keys, orphaned
+facts, clear-text PII, consent leaks. And test suites that don't map to
+product guarantees rot into ceremony. Both need the same fix: **checks that
+fail loudly, tied to named guarantees.**
+
+## Why this way
+
+| Option | Verdict |
+|---|---|
+| Dashboard-only monitoring | Alerts after consumers already consumed the garbage |
+| Checks that log warnings | Nobody reads warnings at 2am |
+| **Gate that raises → DAG fails → run recorded** | ✅ Bad data cannot ship |
+
+## The recipe
+
+### 1. The gate engine
+
+```python
+class DataQualityEngine:
+    def run_all(self) -> DQReport:
+        report = DQReport(run_id=str(uuid.uuid4()))
+        report.results += self._check_uniqueness("gold.customer_360", "customer_id")
+        report.results += self._check_uniqueness("gold.order_facts", "order_id")
+        for table, columns in self.PII_FIELDS.items():
+            report.results += self._check_pii_not_clear(table, columns)
+        report.results += self._check_consent_gated()
+        report.results += self._check_referential_integrity(
+            "gold.order_facts", "customer_id", "gold.customer_360", "customer_id")
+        for result in report.results:
+            self._warehouse.record_dq(report.run_id, ...)
+        return report
+```
+
+The CLI wraps it: any failed check raises `RuntimeError`, which fails the DAG
+task. Every result is recorded to `governance.data_quality_runs` — quality
+history you can audit.
+
+### 2. PII-not-clear: detect leaks structurally
+
+```python
+HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+leaked = any((val := r[col]) is not None and
+             ("@" in str(val) or not HASH_RE.match(str(val)))
+             for r in sample)
+```
+
+An email-shaped `@` or anything that isn't 64 lowercase hex = leak. Cheap,
+robust, independent of how hashing is implemented.
+
+### 3. The consent gate that can actually fail
+
+First version compared `consents_marketing` against `marketing_consent` in a
+way that could never fail — Gold copies the flag, so the query was
+tautology. The fixed invariant checks the mirror both ways:
+
+```sql
+SELECT count(*) FROM gold.customer_360
+WHERE consents_marketing <> marketing_consent
+```
+
+…and the test *proves* it works by corrupting Gold:
+
+```python
+warehouse.conn.execute(
+    "UPDATE gold.customer_360 SET consents_marketing = TRUE "
+    "WHERE marketing_consent = FALSE")
+report = DataQualityEngine(warehouse).run_all()
+assert not consent[0].passed          # gate catches the regression
+```
+
+**A guard you've never seen fail is a guess.**
+
+### 4. Tests as guarantee inventory
+
+49 tests across ten suites, each mapping to a named promise:
+
+| Guarantee | Tests |
+|---|---|
+| IBAN detection rejects UUID look-alikes (mod-97) | `test_pii.py` |
+| Velocity/z-score/geo fire correctly — once per window | `test_fraud.py` |
+| Suppression stops scoring before alerts happen | `test_processor_skips_suppressed_customers` |
+| Erasure anonymizes Bronze, deletes Silver/Gold, audits, persists suppression | `test_erasure.py` |
+| Tombstone carries one identity (`event_id == request_id`) | `test_tombstone_identity_and_durable_suppression` |
+| SQL and Python hash identically | `test_silver_hashes_match_hash_pii_scheme` |
+| Lake export excludes Bronze, matches warehouse counts | `test_export_lake_writes_deidentified_layers_only` |
+| Committed contract baseline matches models | `test_contracts.py` |
+| Durable bus: offsets, consumer groups, replay, latest vs earliest | `test_bus.py` |
+| DAG ordering, cycle detection, retries, failure handling | `test_orchestration.py` |
+| Metrics counters, gauges, histograms, flush, Prometheus rendering | `test_metrics.py` |
+| Governance API: erasure intake, health, metrics, audit endpoints | `test_api.py` |
+| Incremental MERGE with watermarks, watermark persistence | `test_incremental.py` |
+| Lineage emission + Flink-style checkpoint/restore | `test_lineage_checkpoint.py` |
+
+Plus the full quality bar in CI: ruff lint + format, mypy strict, coverage,
+contract drift — and a Docker smoke job running the end-to-end demo inside
+the built image.
+
+## Gotchas & tips
+
+- **Write the negative test for every guard**: corrupt state deliberately and
+  assert the gate trips.
+- **Parameterize identifiers** (`_safe_identifier` regex) before f-stringing
+  them into SQL.
+- **Tip:** name tests after guarantees ("erasure anonymizes bronze"), not
+  methods ("test_update_sql") — the suite then documents the product.
+
+That's the last recipe. Continue to
+[why this architecture wins](/deep-dives/why-this-architecture).

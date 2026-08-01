@@ -1,0 +1,111 @@
+---
+title: "Recipe 5 — PII Governance as Code: Classifiers, ISO 13616 IBAN Validation & Manifest Gates"
+description: "Detect PII in warehouse columns with pure-Python recognizers — including IBAN validation via the ISO 13616 mod-97 checksum that rejects hex UUIDs — and enforce a machine-readable manifest so unregistered PII fails the pipeline."
+sidebar:
+  order: 6
+---
+
+## Problem
+
+Someone adds a `contact_email` column to a source table. Six weeks later
+you discover clear-text emails replicated through every layer — after they've
+been exported to three systems. Detection must happen **at ingestion, in the
+pipeline, automatically**.
+
+## Why this way
+
+| Option | Verdict |
+|---|---|
+| Microsoft Presidio | Excellent, but pulls NLP models + deps; overkill for structural types |
+| Manual column reviews | A spreadsheet is not a control |
+| **Pure-Python recognizers + manifest gate** | ✅ Auditable, offline, dependency-free; Presidio-shaped for a later swap |
+
+The classifier answers one question per value: *which PII types does this
+look like?* The manifest answers the governance question: *which of those are
+registered?*
+
+## The recipe
+
+### 1. Recognizers with real validation
+
+```python
+def _looks_like_iban(value: str) -> bool:
+    compact = re.sub(r"[^A-Z0-9]", "", value.upper())
+    expected = _IBAN_LENGTHS.get(compact[:2])
+    if not expected or len(compact) != expected:
+        return False
+    if not compact[2:4].isdigit():
+        return False
+    rearranged = compact[4:] + compact[:4]
+    numeric = "".join(str(ord(c) - 55) if c.isalpha() else c for c in rearranged)
+    return int(numeric) % 97 == 1        # ISO 13616 mod-97 checksum
+```
+
+The mod-97 check is the whole point. Naive `[A-Z]{2}\d{2}[A-Z0-9]+` regexes
+flag hex UUIDs as "Belgian IBANs" — the classic false positive that makes
+analysts distrust the tool. Structure **plus checksum** kills it:
+
+```python
+classify_value("DE89370400440532013000")   # ["IBAN"]
+classify_value("550e8400-e29b-41d4-a716-446655440000")  # []  ← UUID rejected
+```
+
+Other recognizers: email (fullmatch), IPv4 (regex **plus** `ipaddress`
+validation), phone (requires `+`), conservative title-cased NAME only when
+nothing else matched.
+
+### 2. Column-level majority vote
+
+```python
+def classify_column(name, sample_values, threshold=0.6):
+    counts = {}
+    for v in sample_values:
+        for tag in classify_value(v):
+            counts[tag] = counts.get(tag, 0) + 1
+    total = len(sample_values) or 1
+    return sorted(t for t, n in counts.items() if n / total >= threshold)
+```
+
+One weird row doesn't tag a column; most samples must agree.
+
+### 3. The manifest gate
+
+First run seeds the manifest from Bronze scans (`build_from_rows`). Every run
+after compares findings against registrations:
+
+```python
+findings = classifier.detect_unregistered(rows)
+if findings:
+    raise RuntimeError(f"unregistered PII columns: {findings}")
+```
+
+This runs as the **first task of the medallion DAG** — nothing downstream
+executes if new PII appeared unannounced. The finding names the exact table,
+column, detected tags and registered tags.
+
+### 4. One hash scheme everywhere
+
+```python
+PII_SALT = "eurostream-pii-salt"      # eurostream.config owns the value
+
+def hash_pii(value, salt=PII_SALT):
+    return hashlib.sha256(f"{salt}:{value}".encode()).hexdigest()
+```
+
+Silver's SQL computes `sha256(salt || ':' || value)` — byte-identical. A test
+(`test_silver_hashes_match_hash_pii_scheme`) fails the build if SQL and
+Python ever drift apart.
+
+## Gotchas & tips
+
+- **Validate, don't just pattern-match.** Regex-only recognizers produce the
+  false positives that kill trust in governance tooling.
+- **Seed-then-enforce**: allow the first run to build the baseline, then fail
+  closed forever after. Enforcing on an empty manifest blocks all progress;
+  never enforcing guarantees leaks.
+- **Fail at the DAG head**, not at export time — minimization means stopping
+  propagation early.
+- **Tip:** keep recognizer rules boring and readable. This code gets read by
+  auditors; cleverness is negative value here.
+
+Read next: [schema contracts enforced in CI](/cookbook/schema-contracts-ci).

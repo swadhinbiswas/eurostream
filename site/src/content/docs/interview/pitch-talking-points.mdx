@@ -1,0 +1,95 @@
+---
+title: "EuroStream Interview Pitch & Talking Points — How to Present This Project"
+description: "An interview-ready elevator pitch for the EuroStream GDPR analytics platform, structured talking points per component, metrics to quote, and how to steer any data-engineering conversation toward your strengths."
+sidebar:
+  order: 1
+---
+
+## The 30-second pitch
+
+> "I built a GDPR-compliant real-time analytics platform — the whole EU data
+> stack in pure Python so it runs on a laptop with zero infrastructure. It
+> ingests simulated order/click/payment events onto a Kafka-semantics event
+> log, scores fraud with windowed rules, maintains a medallion warehouse with
+> PII hashed at Silver, and implements Article 17 erasure as a real cascade:
+> durable suppression, Bronze anonymization, Silver/Gold deletion, audit
+> hashes — verified end-to-end by tests and CI gates. The interesting part
+> isn't moving data; it's that governance is executable."
+
+Memorize the last sentence. **"Governance is executable"** is the thesis of
+the whole project.
+
+## The 2-minute version, if invited
+
+Walk this exact path:
+
+1. **Problem framing** (~20s): demos stop at "Kafka → warehouse". In the EU,
+   erasure proof + consent enforcement + PII control are where platforms win
+   or fail audits.
+2. **Architecture** (~30s): Lambda shape — one shared log, speed path for
+   fraud seconds-fast, batch path (medallion) for truth. Interfaces match
+   production components so scaling = swapping adapters.
+3. **The flagship** (~40s): narrate the erasure cascade in order — tombstone,
+   suppression registry (in-memory + durable), Bronze anonymized not deleted,
+   Silver/Gold deleted, alerts purged, lake re-snapshotted, audit hash
+   written, SLA measured. End with: "stage 5 of the demo prints verification:
+   PASSED."
+4. **Enforcement** (~20s): PII manifest gate fails the DAG; schema contracts
+   fail CI on breaking drift; quality gates fail runs. "Documents don't
+   enforce; code does."
+5. **Honesty** (~10s): name the limits proactively (SQLite/DuckDB single-node)
+   *with* the swap paths. Interviewers trust candidates who volunteer scope.
+
+## Component talking points (one breath each)
+
+- **Event bus**: "Kafka semantics on SQLite WAL — offsets, consumer groups,
+  replay. App code sees only Producer/Consumer interfaces; production is an
+  env var away from confluent-kafka."
+- **Fraud scoring**: "Three windowed rules — velocity fires exactly once at
+  threshold+1, amount z-score over a bounded per-customer history, geo
+  mismatch once per window. State expiry is the poor engineer's watermark."
+- **Medallion**: "Bronze keeps raw rows but anonymizes PII on erasure;
+  Silver dedups via row_number and hashes with salted SHA-256 — byte-identical
+  between SQL and Python, pinned by a test; Gold aggregates are consent-aware."
+- **PII governance**: "Structural recognizers plus ISO 13616 mod-97 IBAN
+  checksums — hex UUIDs don't fool it. Unregistered PII columns fail the DAG
+  head, before anything propagates."
+- **Contracts**: "pydantic models snapshot to JSON; CI fails on removed
+  required fields or type changes; additive evolution stays free. And pytest
+  itself verifies the committed baseline matches the models."
+- **Quality gates**: "Uniqueness, referential integrity, PII-not-clear, and a
+  consent mirror check I made falsifiable — the test corrupts Gold and proves
+  the gate trips."
+
+## Metrics & numbers worth quoting
+
+| Number | Why it lands |
+|---|---|
+| ~1,200 source lines | Whole architecture, comprehensible in an afternoon |
+| 49 tests / 10 suites | Every test maps to a named guarantee |
+| 60s documented erasure SLA, measured latency histogram | Compliance you can graph |
+| `sha256(request_id:customer_id)[:16]` | Proof without exposure — quote the scheme |
+| 5 CI gates + container smoke test | Quality bar is automated, not aspirational |
+| €0 to run the full demo | Zero-infrastructure design discipline |
+
+## Steering the conversation
+
+If asked about... | Bridge to...
+---|---
+Kafka internals | Your bus mirrors offsets/groups/replay — discuss ISR vs WAL trade-offs honestly
+Spark/Flink | Windowed rules map 1:1; you chose portability, know the migration path
+Data modeling | Medallion layer contracts, dedup keys, consent propagation
+GDPR/privacy | You implemented Art. 17, not just read about it — cascade order story
+Testing culture | Guarantee-mapped tests; the dead-rule bug story shows tests earning their keep
+CI/CD | Five gates + Docker smoke running the actual demo in the image
+
+## Red flags to avoid
+
+- Don't oversell SQLite/DuckDB as production infra — say "reference stack"
+  and pivot to interfaces.
+- Don't claim the fraud rules are ML — they're interpretable rules *by
+  design*; say what you'd add (gradient-boosted trees on the same features).
+- Don't hide the bugs you found — [the build log](/deep-dives/build-log) is
+  your best material. Debugging stories signal seniority.
+
+Next: [questions & answers](/interview/questions-answers).

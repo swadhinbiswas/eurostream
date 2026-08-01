@@ -1,0 +1,87 @@
+---
+title: "Quickstart — Run the Whole Platform in 60 Seconds"
+description: "Install and run EuroStream locally with uv — full pipeline demo, individual commands for producing events, streaming fraud scoring, medallion transforms, GDPR erasure and schema contract checks."
+sidebar:
+  order: 2
+---
+
+## Prerequisites
+
+- Python **3.11+**
+- [uv](https://docs.astral.sh/uv/) (package manager). No Docker, JVM or cloud
+  account needed for local development.
+
+## Run the end-to-end demo
+
+```bash
+git clone https://github.com/swadhin/eurostream && cd eurostream
+uv sync
+uv run eurostream demo
+```
+
+What you'll see:
+
+```text
+1/6 producing source events...
+2/6 running fraud scoring...
+  fraud alerts emitted: 62
+3/6 loading bus events into Bronze...
+3b/6 running medallion transform + quality gate...
+4/6 executing GDPR right-to-erasure...
+5/6 verifying cascade...
+  bronze PII anonymized rows: 60 (before: 60 clear-text)
+  gold customer_360 rows remaining: 0 (expect 0)
+  audit log entries: 1 (expect 1)
+6/6 summary
+  erasure SLA: 60s, completed in 0.07s
+  verification: PASSED
+```
+
+Stage 5 is the whole story in three lines: Bronze rows survive but their PII
+is gone, Gold has no trace of the customer, and an audit record proves it.
+
+The demo is deterministic — it wipes `data/` first, so repeated runs produce
+comparable output.
+
+## Individual commands
+
+Each command is self-contained and creates its own resources:
+
+```bash
+# Simulate the EU source systems (orders, clicks, payments)
+uv run eurostream produce --events 100
+
+# Streaming fraud scoring against the payments topic
+uv run eurostream stream --max-events 50
+
+# Medallion DAG: PII scan → Silver → Gold → quality gate → lake export
+uv run eurostream transform
+
+# Right-to-erasure cascade for one customer across every layer
+uv run eurostream erase cust_424242
+
+# Schema contract snapshot vs committed baseline (what CI runs)
+uv run eurostream contracts --baseline governance/contracts.json
+```
+
+After a `transform` run you'll also find Parquet snapshots of the
+de-identified layers under `data/lake/silver/` and `data/lake/gold/`.
+
+## The quality gate (same as CI)
+
+```bash
+make gate   # ruff check · ruff format --check · mypy strict · pytest · contracts
+```
+
+## Where things land on disk
+
+| Path | What |
+|---|---|
+| `data/events.db` | SQLite event bus (WAL mode) |
+| `data/eurocart.duckdb` | Medallion warehouse |
+| `data/lake/` | De-identified Parquet exports (Silver/Gold only) |
+| `data/logs/erasure_audit.jsonl` | Append-only erasure audit trail |
+| `data/logs/metrics.jsonl` | Prometheus-shaped metrics snapshots |
+| `governance/contracts.json` | Committed schema contract baseline |
+
+Next: [the cookbook](/cookbook/) starts with the event bus abstraction.
