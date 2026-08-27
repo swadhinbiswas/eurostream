@@ -3,16 +3,19 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from eurostream import __version__
 from eurostream.config import Settings
+from eurostream.dashboard import get_dashboard_html
 from eurostream.governance.erasure import ErasureAudit, ErasureService
 from eurostream.metrics import Metrics
 from eurostream.warehouse import Warehouse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 
 class ErasureRequest(BaseModel):
@@ -32,18 +35,54 @@ def create_app(
         description="GDPR-compliant real-time customer analytics, DSAR right-to-erasure cascade, and Prometheus observability.",
     )
 
-    @app.get("/")
-    def root() -> dict[str, object]:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @app.get("/", response_class=HTMLResponse)
+    def root_dashboard() -> str:
+        return get_dashboard_html()
+
+    @app.get("/dashboard", response_class=HTMLResponse)
+    def dashboard_view() -> str:
+        return get_dashboard_html()
+
+    @app.get("/api")
+    def api_index() -> dict[str, object]:
         return {
             "name": "EuroStream Governance API",
             "version": __version__,
             "docs": "/docs",
             "health": "/health",
+            "stats": "/stats",
             "metrics": "/metrics",
             "prometheus": "/metrics/prometheus",
             "erasure_audit": "/governance/erasure-audit",
             "customer_360": "/gold/customer-360",
         }
+
+    @app.get("/stats")
+    def pipeline_stats() -> dict[str, object]:
+        stats: dict[str, object] = {
+            "version": __version__,
+            "sla_seconds": settings.erasure_sla_seconds,
+            "suppressed_customers": len(erasure.suppressed_customers()),
+        }
+        if warehouse is not None:
+            try:
+                stats["bronze_orders"] = warehouse.scalar("SELECT count(*) FROM bronze.orders")
+                stats["bronze_clicks"] = warehouse.scalar("SELECT count(*) FROM bronze.clicks")
+                stats["bronze_payments"] = warehouse.scalar("SELECT count(*) FROM bronze.payments")
+                stats["silver_customers"] = warehouse.scalar("SELECT count(*) FROM silver.customers")
+                stats["gold_customers"] = warehouse.scalar("SELECT count(*) FROM gold.customer_360")
+                stats["fraud_alerts"] = warehouse.scalar("SELECT count(*) FROM gold.fraud_summary")
+            except Exception as e:
+                logger.debug("Failed to query stats from warehouse: %s", e)
+        return stats
 
     @app.post("/erasure-requests")
     def request_erasure(body: ErasureRequest) -> dict[str, object]:
