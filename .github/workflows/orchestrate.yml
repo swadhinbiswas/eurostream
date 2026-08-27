@@ -2,7 +2,7 @@ name: orchestrate
 
 on:
   schedule:
-    - cron: "0 */5 * * *"  # every 5 hours -> ~1k new rows
+    - cron: "0 */4 * * *"  # every 4 hours -> fresh batch into lake
   push:
     branches: [master]  # also on every push to swadhinbiswas/eustream lake
   workflow_dispatch: {}
