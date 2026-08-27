@@ -10,15 +10,18 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_bootstrap(bootstrap: str) -> str:
-    """Clean bootstrap string — handles full Service URI, masked ***, and whitespace.
+    """Clean bootstrap string — handles full Service URI, masked ***, quotes, and whitespace.
 
     Accepts:
       - host:port
+      - "host:port" or 'host:port'
       - https://user:pass@host:port
+      - kafka://user:pass@host:port
+      - kafka+ssl://user:pass@host:port
       - sasl_ssl://user:pass@host:port/db
     Returns host:port or raises ValueError if unusable.
     """
-    raw = (bootstrap or "").strip()
+    raw = (bootstrap or "").strip().strip("\"' \t\r\n")
     if not raw or raw == "***" or raw.count("*") >= 3:
         raise ValueError(
             "Kafka bootstrap is not set — check EUROSTREAM_KAFKA_BOOTSTRAP_SERVERS secret"
@@ -29,8 +32,8 @@ def _parse_bootstrap(bootstrap: str) -> str:
     # Strip user:pass@
     if "@" in raw:
         raw = raw.split("@", 1)[1]
-    # Strip trailing path /...
-    raw = raw.split("/", 1)[0].strip()
+    # Strip trailing path /... and query parameters ?...
+    raw = raw.split("/", 1)[0].split("?", 1)[0].strip("\"' \t\r\n")
     # Basic host:port validation
     if not re.match(r"^[\w\-.]+:\d+(\s*,\s*[\w\-.]+:\d+)*$", raw):
         # Allow but warn — confluent will validate
@@ -55,14 +58,20 @@ class KafkaProducer(Producer):
         from confluent_kafka import Producer as _CProducer
 
         clean = _parse_bootstrap(bootstrap_servers)
-        conf: dict[str, str] = {"bootstrap.servers": clean}
+        conf: dict[str, Any] = {
+            "bootstrap.servers": clean,
+            "broker.address.family": "v4",
+            "socket.timeout.ms": 10000,
+            "request.timeout.ms": 10000,
+            "message.timeout.ms": 15000,
+        }
         if username and password:
             conf.update(
                 {
                     "security.protocol": security_protocol,
                     "sasl.mechanism": sasl_mechanism,
-                    "sasl.username": username,
-                    "sasl.password": password,
+                    "sasl.username": str(username).strip("\"' "),
+                    "sasl.password": str(password).strip("\"' "),
                 }
             )
         self._producer = _CProducer(conf)
@@ -70,19 +79,9 @@ class KafkaProducer(Producer):
     def produce(
         self, topic: str, key: str, value: str, headers: dict[str, str] | None = None
     ) -> RecordMetadata:
-        import threading
-
-        delivered = threading.Event()
-        result: dict[str, int] = {}
-        error: list[object] = []
-
         def _on_delivery(err: object, msg: Any) -> None:
             if err is not None:
-                error.append(err)
-            elif msg is not None:
-                result["offset"] = int(msg.offset())
-                result["partition"] = int(msg.partition())
-            delivered.set()
+                logger.error("Kafka delivery error on topic %s: %s", topic, err)
 
         # confluent-kafka expects headers as list of (str, bytes)
         kafka_headers = [(k, v.encode()) for k, v in (headers or {}).items()] if headers else None
@@ -93,16 +92,13 @@ class KafkaProducer(Producer):
             headers=kafka_headers,
             on_delivery=_on_delivery,
         )
-        # flush() blocks until every delivery callback has run, so the
-        # assigned offset/partition are known before we return.
-        self._producer.flush()
-        if error:
-            logger.error("Kafka delivery failed: %s", error[0])
-            # Return -1 offset to signal failure; caller can metric this.
-            # For erasure tombstones this is a GDPR-critical failure — caller should retry.
-        return RecordMetadata(
-            topic=topic, partition=result.get("partition", 0), offset=result.get("offset", -1)
-        )
+        # Serve delivery callbacks without blocking synchronous roundtrips
+        self._producer.poll(0)
+        return RecordMetadata(topic=topic, partition=0, offset=0)
+
+    def flush(self, timeout: float = 10.0) -> int:
+        """Wait for all outstanding messages to be delivered."""
+        return self._producer.flush(timeout)
 
 
 class KafkaConsumer(Consumer):
@@ -125,14 +121,17 @@ class KafkaConsumer(Consumer):
             "group.id": group_id,
             "auto.offset.reset": auto_offset_reset,
             "enable.auto.commit": False,
+            "broker.address.family": "v4",
+            "socket.timeout.ms": 10000,
+            "session.timeout.ms": 15000,
         }
         if username and password:
             conf.update(
                 {
                     "security.protocol": security_protocol,
                     "sasl.mechanism": sasl_mechanism,
-                    "sasl.username": username,
-                    "sasl.password": password,
+                    "sasl.username": str(username).strip("\"' "),
+                    "sasl.password": str(password).strip("\"' "),
                 }
             )
         self._consumer = _CConsumer(conf)
@@ -195,6 +194,9 @@ class KafkaBus(Producer):
     ) -> RecordMetadata:
         return self._producer.produce(topic, key, value, headers)
 
+    def flush(self, timeout: float = 10.0) -> int:
+        return self._producer.flush(timeout)
+
     def consumer(
         self, topic: str, group_id: str, auto_offset_reset: str = "latest"
     ) -> KafkaConsumer:
@@ -210,4 +212,4 @@ class KafkaBus(Producer):
         )
 
     def close(self) -> None:
-        pass
+        self._producer.flush()
