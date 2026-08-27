@@ -98,7 +98,7 @@ class KafkaProducer(Producer):
 
     def flush(self, timeout: float = 10.0) -> int:
         """Wait for all outstanding messages to be delivered."""
-        return self._producer.flush(timeout)
+        return int(self._producer.flush(timeout))
 
 
 class KafkaConsumer(Consumer):

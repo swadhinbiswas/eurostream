@@ -65,3 +65,26 @@ def test_bus_topic_offsets(tmp_path):
     offs = bus.topic_offsets("orders")
     assert offs[0] == 2
     bus.close()
+
+
+def test_kafka_bootstrap_parser():
+    import pytest
+
+    from eurostream.bus.kafka import _parse_bootstrap
+
+    assert _parse_bootstrap("localhost:9092") == "localhost:9092"
+    assert _parse_bootstrap('"localhost:9092"') == "localhost:9092"
+    assert _parse_bootstrap("'kafka.aivencloud.com:28362'") == "kafka.aivencloud.com:28362"
+    assert (
+        _parse_bootstrap("https://user:pass@kafka.aivencloud.com:28362")
+        == "kafka.aivencloud.com:28362"
+    )
+    assert (
+        _parse_bootstrap("kafka+ssl://avnadmin:secret@kafka-proj.aiven.com:12345/default?ssl=true")
+        == "kafka-proj.aiven.com:12345"
+    )
+
+    with pytest.raises(ValueError):
+        _parse_bootstrap("")
+    with pytest.raises(ValueError):
+        _parse_bootstrap("***")
