@@ -18,25 +18,54 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
-      - name: Deploy FastAPI Backend to HF Space swadhinbiswas/eurostream-api
+      - name: Deploy EuroStream to Hugging Face Space
         run: |
           uv run python -c "
-          import os
+          import os, tempfile
+          from pathlib import Path
           from huggingface_hub import HfApi
+          from huggingface_hub.errors import HfHubHTTPError
+
           token = os.environ.get('HF_TOKEN')
           if not token:
               print('::error::HF_TOKEN not configured in GitHub repository secrets')
               exit(1)
+
           api = HfApi(token=token)
-          space_id = 'swadhinbiswas/eurostream-api'
-          api.create_repo(repo_id=space_id, repo_type='space', space_sdk='docker', exist_ok=True)
-          api.upload_folder(
-              folder_path='.',
-              repo_id=space_id,
-              repo_type='space',
-              ignore_patterns=['.git/**', '.venv/**', 'site/**', 'notes/**', 'assets/**', 'data/**', '**/__pycache__/**', '*.pyc']
-          )
-          print(f'Successfully deployed FastAPI backend to https://huggingface.co/spaces/{space_id}')
+          space_id = 'swadhinbiswas/eurostream'
+
+          # 1. Try Docker space (works if PRO or space already exists)
+          try:
+              api.create_repo(repo_id=space_id, repo_type='space', space_sdk='docker', exist_ok=True)
+              api.upload_folder(
+                  folder_path='.',
+                  repo_id=space_id,
+                  repo_type='space',
+                  ignore_patterns=['.git/**', '.venv/**', 'site/**', 'notes/**', 'assets/**', 'data/**', '**/__pycache__/**', '*.pyc']
+              )
+              print(f'Successfully deployed Docker backend to https://huggingface.co/spaces/{space_id}')
+              exit(0)
+          except HfHubHTTPError as e:
+              if '402' in str(e) or 'Payment Required' in str(e):
+                  print('::notice::Hugging Face Docker Spaces require a PRO plan. Deploying 100% free Static Space portal instead.')
+              else:
+                  print(f'::warning::Docker Space creation note: {e}. Falling back to Static Space.')
+
+          # 2. Free Static Space fallback (guaranteed 100% free for everyone)
+          from eurostream.portal import build_portal_html
+          with tempfile.TemporaryDirectory() as tmpdir:
+              tmp = Path(tmpdir)
+              (tmp / 'index.html').write_text(build_portal_html())
+              (tmp / 'README.md').write_text(
+                  '---\ntitle: EuroStream\nemoji: ⚡\ncolorFrom: blue\ncolorTo: indigo\nsdk: static\npinned: false\n---\n\n# EuroStream Documentation Portal\n\nLive at https://huggingface.co/spaces/' + space_id
+              )
+              api.create_repo(repo_id=space_id, repo_type='space', space_sdk='static', exist_ok=True)
+              api.upload_folder(
+                  folder_path=str(tmp),
+                  repo_id=space_id,
+                  repo_type='space'
+              )
+              print(f'Successfully deployed free Static Portal to https://huggingface.co/spaces/{space_id}')
           "
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
