@@ -78,12 +78,18 @@ def create_app(
                 stats["bronze_orders"] = warehouse.scalar("SELECT count(*) FROM bronze.orders")
                 stats["bronze_clicks"] = warehouse.scalar("SELECT count(*) FROM bronze.clicks")
                 stats["bronze_payments"] = warehouse.scalar("SELECT count(*) FROM bronze.payments")
-                stats["bronze_fraud_alerts"] = warehouse.scalar("SELECT count(*) FROM bronze.fraud_alerts")
-                stats["silver_customers"] = warehouse.scalar("SELECT count(*) FROM silver.customers")
+                stats["bronze_fraud_alerts"] = warehouse.scalar(
+                    "SELECT count(*) FROM bronze.fraud_alerts"
+                )
+                stats["silver_customers"] = warehouse.scalar(
+                    "SELECT count(*) FROM silver.customers"
+                )
                 stats["silver_orders"] = warehouse.scalar("SELECT count(*) FROM silver.orders")
                 stats["silver_payments"] = warehouse.scalar("SELECT count(*) FROM silver.payments")
                 stats["gold_customers"] = warehouse.scalar("SELECT count(*) FROM gold.customer_360")
-                stats["gold_order_facts"] = warehouse.scalar("SELECT count(*) FROM gold.order_facts")
+                stats["gold_order_facts"] = warehouse.scalar(
+                    "SELECT count(*) FROM gold.order_facts"
+                )
                 stats["fraud_alerts"] = warehouse.scalar("SELECT count(*) FROM gold.fraud_summary")
                 try:
                     stats["silver_watermark"] = warehouse.get_watermark("silver")
@@ -98,7 +104,51 @@ def create_app(
                     pass
             except Exception as e:
                 logger.debug("Failed to query stats from warehouse: %s", e)
-        stats["total_rows"] = sum(int(str(stats.get(k, 0) or 0)) for k in ["bronze_orders","bronze_clicks","bronze_payments","silver_customers","gold_customers"])
+        stats["total_rows"] = sum(
+            int(str(stats.get(k, 0) or 0))
+            for k in [
+                "bronze_orders",
+                "bronze_clicks",
+                "bronze_payments",
+                "silver_customers",
+                "gold_customers",
+            ]
+        )
+        # Fallback: if Render warehouse is empty (ephemeral disk, no Turso), read counts from HF lake so dashboard shows 5.59k not —
+        if stats["total_rows"] == 0:
+            try:
+                import duckdb
+
+                # Try HF lake via DuckDB httpfs (public dataset, no token needed)
+                hf_base = "hf://datasets/swadhinbiswas/eustream"
+                for tbl, key in [
+                    ("silver/orders", "silver_customers"),
+                    ("gold/customer_360", "gold_customers"),
+                ]:
+                    try:
+                        row = duckdb.query(  # noqa: S608
+                            f"SELECT count(*) FROM read_parquet('{hf_base}/{tbl}.parquet')"  # noqa: S608
+                        ).fetchone()
+                        cnt = row[0] if row else 0
+                        if cnt and int(cnt) > 0:
+                            stats[key] = int(cnt)
+                    except Exception:  # noqa: S110
+                        pass
+                # Recompute total after HF fallback
+                stats["total_rows"] = sum(
+                    int(str(stats.get(k, 0) or 0))
+                    for k in [
+                        "bronze_orders",
+                        "bronze_clicks",
+                        "bronze_payments",
+                        "silver_customers",
+                        "gold_customers",
+                    ]
+                )
+                if stats["total_rows"] > 0:
+                    stats["source"] = "hf_lake"
+            except Exception as e:
+                logger.debug("HF lake fallback failed: %s", e)
         return stats
 
     @app.post("/erasure-requests")
@@ -159,7 +209,9 @@ def create_app(
                     f"SELECT * FROM bronze.fraud_alerts ORDER BY alert_ts DESC LIMIT {int(limit)}"  # noqa: S608
                 )
             except Exception:
-                return warehouse.query("SELECT * FROM gold.fraud_summary ORDER BY last_alert DESC LIMIT 20")
+                return warehouse.query(
+                    "SELECT * FROM gold.fraud_summary ORDER BY last_alert DESC LIMIT 20"
+                )
 
         @app.get("/governance/data_quality_runs")
         def data_quality_runs(limit: int = 20) -> list[dict[str, object]]:
@@ -180,10 +232,14 @@ def bootstrap() -> FastAPI:
     if settings.event_bus_backend == "kafka":
         try:
             from eurostream.bus.kafka import KafkaBus
+
             bus = KafkaBus(settings)
         except (ImportError, ModuleNotFoundError, ValueError) as e:
             import logging as _lg
-            _lg.getLogger(__name__).warning("Kafka backend requested but unavailable (%s) — falling back to SQLite", e)
+
+            _lg.getLogger(__name__).warning(
+                "Kafka backend requested but unavailable (%s) — falling back to SQLite", e
+            )
             bus = None
     if bus is None:
         bus = open_bus(settings.data_dir / "events.db")
