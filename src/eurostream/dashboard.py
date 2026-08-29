@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from eurostream import __version__
+
 
 def get_dashboard_html() -> str:
     v = __version__
@@ -137,9 +139,11 @@ function dashboard(){
   async triggerTransform(){ this.loading=true; await fetch(this.apiUrl+'/transform?incremental=true',{method:'POST'}).catch(()=>{}); setTimeout(()=>{this.fetchAll(); this.loading=false;},1000); },
   renderCharts(){
    setTimeout(()=>{
-    const fraudCtx=document.getElementById('fraudChart'); if(fraudCtx && window.Chart){ const counts={}; this.fraudAlerts.forEach(a=>counts[a.rule]=(counts[a.rule]||0)+1); const labels=Object.keys(counts).length?Object.keys(counts):['VELOCITY','GEO_MISMATCH','AMOUNT_OUTLIER']; const data=Object.keys(counts).length?Object.values(counts):[3,2,1]; new Chart(fraudCtx,{type:'bar',data:{labels,datasets:[{data,backgroundColor:['#f59e0b','#3b82f6','#06b6d4']}]},options:{plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{color:'#94a3b8',font:{size:10}}},y:{grid:{color:'#1e293b'},ticks:{color:'#94a3b8'}}}}}); }
-    const ingestCtx=document.getElementById('ingestChart'); if(ingestCtx && window.Chart){ new Chart(ingestCtx,{type:'line',data:{labels:['-5','-4','-3','-2','-1','now'],datasets:[{label:'Orders',data:[65,72,68,80,75,90],borderColor:'#0ea5e9',backgroundColor:'rgba(14,165,233,0.1)',tension:0.4,fill:true}]},options:{plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{color:'#94a3b8'}},y:{grid:{color:'#1e293b'},ticks:{color:'#94a3b8'}}}}}); }
-    const consentCtx=document.getElementById('consentChart'); if(consentCtx && window.Chart){ const consented=this.customers.filter(c=>c.marketing_consent).length; const optout=this.customers.length-consented; new Chart(consentCtx,{type:'doughnut',data:{labels:['Consented','Opt-out'],datasets:[{data:[consented||12,optout||5],backgroundColor:['#10b981','#334155']}]},options:{plugins:{legend:{labels:{color:'#94a3b8',boxWidth:12}}},cutout:'65%'}}); }
+    const getCtx = (id) => document.getElementById(id);
+    const destroyIfExists = (id) => { const c = Chart.getChart(id); if(c) c.destroy(); };
+    const fraudEl=getCtx('fraudChart'); if(fraudEl && window.Chart){ destroyIfExists('fraudChart'); const counts={}; this.fraudAlerts.forEach(a=>counts[a.rule]=(counts[a.rule]||0)+1); const labels=Object.keys(counts).length?Object.keys(counts):['VELOCITY','GEO_MISMATCH','AMOUNT_OUTLIER']; const data=Object.keys(counts).length?Object.values(counts):[3,2,1]; new Chart(fraudEl,{type:'bar',data:{labels,datasets:[{data,backgroundColor:['#f59e0b','#3b82f6','#06b6d4']}]},options:{plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{color:'#94a3b8',font:{size:10}}},y:{grid:{color:'#1e293b'},ticks:{color:'#94a3b8'}}}}}); }
+    const ingestEl=getCtx('ingestChart'); if(ingestEl && window.Chart){ destroyIfExists('ingestChart'); new Chart(ingestEl,{type:'line',data:{labels:['-5','-4','-3','-2','-1','now'],datasets:[{label:'Orders',data:[65,72,68,80,75,90],borderColor:'#0ea5e9',backgroundColor:'rgba(14,165,233,0.1)',tension:0.4,fill:true}]},options:{plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{color:'#94a3b8'}},y:{grid:{color:'#1e293b'},ticks:{color:'#94a3b8'}}}}}); }
+    const consentEl=getCtx('consentChart'); if(consentEl && window.Chart){ destroyIfExists('consentChart'); const consented=this.customers.filter(c=>c.marketing_consent).length; const optout=this.customers.length-consented; new Chart(consentEl,{type:'doughnut',data:{labels:['Consented','Opt-out'],datasets:[{data:[consented||12,optout||5],backgroundColor:['#10b981','#334155']}]},options:{plugins:{legend:{labels:{color:'#94a3b8',boxWidth:12}}},cutout:'65%'}}); }
    },200);
   }
  }

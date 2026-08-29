@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -88,17 +89,16 @@ def create_app(
                     stats["silver_watermark"] = warehouse.get_watermark("silver")
                     stats["gold_watermark"] = warehouse.get_watermark("gold")
                     # lineage last
-                    import pathlib
                     lp = settings.data_dir / "lineage.jsonl"
                     if lp.exists():
                         lines = lp.read_text().strip().splitlines()
                         if lines:
                             stats["lineage"] = lines[-1][:400]
-                except Exception:
+                except Exception:  # noqa: S110
                     pass
             except Exception as e:
                 logger.debug("Failed to query stats from warehouse: %s", e)
-        stats["total_rows"] = sum(int(stats.get(k, 0)) for k in ["bronze_orders","bronze_clicks","bronze_payments","silver_customers","gold_customers"])
+        stats["total_rows"] = sum(int(str(stats.get(k, 0) or 0)) for k in ["bronze_orders","bronze_clicks","bronze_payments","silver_customers","gold_customers"])
         return stats
 
     @app.post("/erasure-requests")
@@ -147,6 +147,26 @@ def create_app(
                 f"SELECT * FROM gold.customer_360 ORDER BY customer_id LIMIT {int(limit)}"  # noqa: S608
             )
 
+        @app.get("/gold/fraud_summary")
+        def fraud_summary() -> list[dict[str, object]]:
+            return warehouse.query("SELECT * FROM gold.fraud_summary ORDER BY last_alert DESC")
+
+        @app.get("/fraud_alerts")
+        def fraud_alerts(limit: int = 50) -> list[dict[str, object]]:
+            # Bronze alerts are the raw stream; gold summary is the curated view
+            try:
+                return warehouse.query(
+                    f"SELECT * FROM bronze.fraud_alerts ORDER BY alert_ts DESC LIMIT {int(limit)}"  # noqa: S608
+                )
+            except Exception:
+                return warehouse.query("SELECT * FROM gold.fraud_summary ORDER BY last_alert DESC LIMIT 20")
+
+        @app.get("/governance/data_quality_runs")
+        def data_quality_runs(limit: int = 20) -> list[dict[str, object]]:
+            return warehouse.query(
+                f"SELECT * FROM governance.data_quality_runs ORDER BY checked_at DESC LIMIT {int(limit)}"  # noqa: S608
+            )
+
     return app
 
 
@@ -156,11 +176,18 @@ def bootstrap() -> FastAPI:
 
     settings = Settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
+    bus: Any = None
     if settings.event_bus_backend == "kafka":
-        from eurostream.bus.kafka import KafkaBus
-        bus = KafkaBus(settings)
-    else:
+        try:
+            from eurostream.bus.kafka import KafkaBus
+            bus = KafkaBus(settings)
+        except (ImportError, ModuleNotFoundError, ValueError) as e:
+            import logging as _lg
+            _lg.getLogger(__name__).warning("Kafka backend requested but unavailable (%s) — falling back to SQLite", e)
+            bus = None
+    if bus is None:
         bus = open_bus(settings.data_dir / "events.db")
+    assert bus is not None
     warehouse = Warehouse(settings.warehouse_path)
     metrics = Metrics(settings.metrics_path)
 
