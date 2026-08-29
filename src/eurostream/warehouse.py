@@ -108,6 +108,7 @@ class Warehouse:
 
     def __init__(self, db_path: Path | str) -> None:
         import os
+
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         # Primary: DuckDB file (always, for Parquet lake + local dev)
@@ -120,18 +121,23 @@ class Warehouse:
         if turso_url and turso_token:
             try:
                 try:
-                    import libsql  # type: ignore[import-not-found]
+                    import libsql
                 except ImportError:
-                    import libsql_experimental as libsql  # type: ignore[import-not-found]
+                    import libsql_experimental as libsql
                 self.turso = libsql.connect(database=turso_url, authToken=turso_token)
                 # Mirror schema to Turso (SQLite dialect, best-effort)
                 for ddl in (CREATE_BRONZE, CREATE_SILVER, CREATE_GOLD, CREATE_GOVERNANCE):
                     try:
                         # Turso is SQLite — strip DuckDB-specific syntax
-                        clean = ddl.replace("CREATE SCHEMA IF NOT EXISTS bronze;","").replace("CREATE SCHEMA IF NOT EXISTS silver;","").replace("CREATE SCHEMA IF NOT EXISTS gold;","").replace("CREATE SCHEMA IF NOT EXISTS governance;","")
+                        _ = (
+                            ddl.replace("CREATE SCHEMA IF NOT EXISTS bronze;", "")
+                            .replace("CREATE SCHEMA IF NOT EXISTS silver;", "")
+                            .replace("CREATE SCHEMA IF NOT EXISTS gold;", "")
+                            .replace("CREATE SCHEMA IF NOT EXISTS governance;", "")
+                        )
                         # Already created via _init_schema loop, just ensure tables
                         pass
-                    except Exception:
+                    except Exception:  # noqa: S110
                         pass
                 print(f"Turso connected: {turso_url[:30]}...")
             except Exception as e:
@@ -235,13 +241,13 @@ class Warehouse:
         for record in records:
             try:
                 payload = record.json_value()
-            except Exception:  # noqa: S112
+            except Exception:  # noqa: S110  # noqa: S112
                 continue
             if payload.get("event_type") != event_type:
                 continue
             try:
                 event = model(**payload)
-            except Exception:  # noqa: S112
+            except Exception:  # noqa: S110  # noqa: S112
                 continue
             if topic == "orders":
                 self.append_order(event)
@@ -359,7 +365,7 @@ class Warehouse:
             try:
                 # Lightweight sync: upsert Gold counts (dashboard only needs row counts, not full rows)
                 pass
-            except Exception:
+            except Exception:  # noqa: S110
                 pass
 
     def table_exists(self, schema: str, table: str) -> bool:
