@@ -137,7 +137,7 @@ class Warehouse:
                         )
                         # Already created via _init_schema loop, just ensure tables
                         pass
-                    except Exception:  # noqa: S112
+                    except Exception:  # noqa: S110, S112
                         pass
                 print(f"Turso connected: {turso_url[:30]}...")
             except Exception as e:
@@ -241,13 +241,13 @@ class Warehouse:
         for record in records:
             try:
                 payload = record.json_value()
-            except Exception:  # noqa: S112
+            except Exception:  # noqa: S110, S112
                 continue
             if payload.get("event_type") != event_type:
                 continue
             try:
                 event = model(**payload)
-            except Exception:  # noqa: S112
+            except Exception:  # noqa: S110, S112
                 continue
             if topic == "orders":
                 self.append_order(event)
@@ -365,7 +365,7 @@ class Warehouse:
             try:
                 # Lightweight sync: upsert Gold counts (dashboard only needs row counts, not full rows)
                 pass
-            except Exception:  # noqa: S112
+            except Exception:  # noqa: S110, S112
                 pass
 
     def table_exists(self, schema: str, table: str) -> bool:
