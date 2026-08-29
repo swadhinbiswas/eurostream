@@ -5,6 +5,7 @@ description = "GDPR-compliant real-time customer & order analytics platform"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "libsql-experimental>=0.2",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "duckdb>=1.0",
