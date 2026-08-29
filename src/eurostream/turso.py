@@ -254,8 +254,8 @@ class TursoClient:
             except Exception as e:
                 logger.debug("Turso native executemany failed (%s), falling back to HTTP", e)
 
-        # Batch in chunks of 100 statements via HTTP pipeline
-        chunk_size = 100
+        # Batch in chunks of 250 statements via HTTP pipeline
+        chunk_size = 250
         total_affected = 0
         for i in range(0, len(params_list), chunk_size):
             chunk = params_list[i : i + chunk_size]
