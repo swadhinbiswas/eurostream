@@ -2,11 +2,16 @@ name: orchestrate
 on:
   schedule:
     - cron: "0 */4 * * *"  # 00,04,08,12,16,20 UTC = 06,10,14,18,22,02 Dhaka
+  push:
+    branches: [master]
   workflow_dispatch: {}
 jobs:
   medallion:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: orchestrate-medallion
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -44,13 +49,17 @@ jobs:
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
       - name: Push to HF swadhinbiswas/eustream
         run: |
           uv run python -c "
           import os; from huggingface_hub import HfApi
-          api=HfApi(token=os.environ['HF_TOKEN'])
+          tok=os.environ.get('HF_TOKEN')
+          if not tok: print('HF_TOKEN missing'); exit(0)
+          api=HfApi(token=tok)
           api.create_repo(repo_id='swadhinbiswas/eustream', repo_type='dataset', exist_ok=True)
           api.upload_folder(folder_path='data/lake', repo_id='swadhinbiswas/eustream', repo_type='dataset')
+          print('uploaded to swadhinbiswas/eustream')
           "
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
