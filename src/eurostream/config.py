@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -93,6 +93,21 @@ class Settings(BaseSettings):
     audit_log_path: Path = Field(default=PROJECT_ROOT / "data" / "logs" / "erasure_audit.jsonl")
     metrics_path: Path = Field(default=PROJECT_ROOT / "data" / "logs" / "metrics.jsonl")
     pipeline_log_path: Path = Field(default=PROJECT_ROOT / "data" / "logs" / "pipeline.jsonl")
+
+    turso_database_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "turso_database_url", "TURSO_DATABASE_URL", "EUROSTREAM_TURSO_DATABASE_URL"
+        ),
+        description="Turso / libSQL database URL (libsql://... or https://...)",
+    )
+    turso_auth_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "turso_auth_token", "TURSO_AUTH_TOKEN", "EUROSTREAM_TURSO_AUTH_TOKEN"
+        ),
+        description="Turso / libSQL authentication token",
+    )
 
 
 @lru_cache
