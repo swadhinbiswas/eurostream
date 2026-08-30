@@ -16,9 +16,8 @@ def get_dashboard_html() -> str:
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-<style>[x-cloak]{display:none!important}</style>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen antialiased font-sans" x-data="dashboard()" x-init="init()">
+<body class="bg-slate-950 text-slate-100 min-h-screen antialiased font-sans" x-data="dashboard()">
 <header class="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/85 backdrop-blur-md">
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
 <div class="flex items-center gap-3">
@@ -409,11 +408,12 @@ function dashboard(){
   async init(){
    await this.fetchAll();
    this.renderCharts();
-   setInterval(() => this.fetchAll(), 4000);
+   this.pollTimer = setInterval(() => this.fetchTelemetry(), 6000);
   },
 
   setTab(t){
    this.tab = t;
+   this.fetchTabData(t);
    if(t === 'overview') this.$nextTick(() => this.renderCharts());
   },
 
@@ -425,7 +425,7 @@ function dashboard(){
   },
   selectForErasure(cid){
    this.erasureCustomerId = cid;
-   this.tab = 'erasure';
+   this.setTab('erasure');
    window.scrollTo({top: 0, behavior: 'smooth'});
   },
   copyText(txt){
@@ -434,53 +434,72 @@ function dashboard(){
    setTimeout(() => this.bannerMessage = '', 3000);
   },
 
-  async fetchAll(){
+  async fetchTelemetry(){
+   if(this.isFetchingTelemetry) return;
+   this.isFetchingTelemetry = true;
    try{
-    const h = await fetch(this.apiUrl + '/health').catch(() => null);
-    if(h && h.ok){
-     this.connected = true;
-     const hj = await h.json();
-     this.backend = hj.backend || 'sqlite';
-     this.suppressedCount = (hj.suppressed || []).length;
-    } else {
-     this.connected = false;
+    const [hRes, sRes, faRes] = await Promise.allSettled([
+      fetch(this.apiUrl + '/health').then(r => r.ok ? r.json() : null),
+      fetch(this.apiUrl + '/stats').then(r => r.ok ? r.json() : null),
+      fetch(this.apiUrl + '/fraud_alerts?limit=50').then(r => r.ok ? r.json() : null)
+    ]);
+
+    if(hRes.status === 'fulfilled' && hRes.value){
+      this.connected = true;
+      this.backend = hRes.value.backend || 'sqlite';
+      this.suppressedCount = (hRes.value.suppressed || []).length;
+    } else if(hRes.status === 'rejected'){
+      this.connected = false;
     }
 
-    const s = await fetch(this.apiUrl + '/stats').catch(() => null);
-    if(s && s.ok){
-     this.stats = await s.json();
-     if(this.stats.silver_watermark) this.watermark = this.stats.silver_watermark;
-     if(this.stats.gold_watermark) this.goldWatermark = this.stats.gold_watermark;
+    if(sRes.status === 'fulfilled' && sRes.value){
+      this.stats = sRes.value;
+      if(this.stats.silver_watermark) this.watermark = this.stats.silver_watermark;
+      if(this.stats.gold_watermark) this.goldWatermark = this.stats.gold_watermark;
     }
 
-    const m = await fetch(this.apiUrl + '/metrics').catch(() => null);
-    if(m && m.ok) this.rawMetrics = await m.json();
-
-    const mp = await fetch(this.apiUrl + '/metrics/prometheus').catch(() => null);
-    if(mp && mp.ok) this.metricsText = await mp.text();
-
-    const fa = await fetch(this.apiUrl + '/fraud_alerts?limit=50').catch(() => null);
-    if(fa && fa.ok){
-     const faj = await fa.json();
-     if(Array.isArray(faj)) this.fraudAlerts = faj;
+    if(faRes.status === 'fulfilled' && Array.isArray(faRes.value)){
+      this.fraudAlerts = faRes.value;
     }
-
-    const c = await fetch(this.apiUrl + '/gold/customer-360?limit=100').catch(() => null);
-    if(c && c.ok){
-     const cj = await c.json();
-     if(Array.isArray(cj) && cj.length) this.customers = cj;
-    }
-
-    const a = await fetch(this.apiUrl + '/governance/erasure-audit').catch(() => null);
-    if(a && a.ok) this.audits = await a.json();
-
-    const q = await fetch(this.apiUrl + '/governance/data_quality_runs?limit=10').catch(() => null);
-    if(q && q.ok) this.dq = await q.json();
 
     if(this.tab === 'overview') this.renderCharts();
    } catch(e){
     this.connected = false;
+   } finally {
+    this.isFetchingTelemetry = false;
    }
+  },
+
+  async fetchTabData(tab){
+   const currentTab = tab || this.tab;
+   try{
+    if(currentTab === 'medallion'){
+      const c = await fetch(this.apiUrl + '/gold/customer-360?limit=100').then(r => r.ok ? r.json() : null).catch(() => null);
+      if(Array.isArray(c)) this.customers = c;
+    } else if(currentTab === 'erasure'){
+      const a = await fetch(this.apiUrl + '/governance/erasure-audit').then(r => r.ok ? r.json() : null).catch(() => null);
+      if(Array.isArray(a)) this.audits = a;
+    } else if(currentTab === 'quality'){
+      const q = await fetch(this.apiUrl + '/governance/data_quality_runs?limit=10').then(r => r.ok ? r.json() : null).catch(() => null);
+      if(Array.isArray(q)) this.dq = q;
+    } else if(currentTab === 'metrics'){
+      const [m, mp] = await Promise.allSettled([
+        fetch(this.apiUrl + '/metrics').then(r => r.ok ? r.json() : null),
+        fetch(this.apiUrl + '/metrics/prometheus').then(r => r.ok ? r.text() : null)
+      ]);
+      if(m.status === 'fulfilled' && m.value) this.rawMetrics = m.value;
+      if(mp.status === 'fulfilled' && mp.value) this.metricsText = mp.value;
+    }
+   } catch(e){
+    console.debug('Tab data fetch error:', e);
+   }
+  },
+
+  async fetchAll(){
+   await Promise.allSettled([
+     this.fetchTelemetry(),
+     this.fetchTabData(this.tab)
+   ]);
   },
 
   async triggerProduce(events=100){
@@ -544,9 +563,12 @@ function dashboard(){
    const victim = 'cust_attack_' + Math.floor(Math.random()*900+100);
    try{
     await fetch(this.apiUrl + '/produce?events=30&burst_customer=' + victim, {method: 'POST'});
-    await fetch(this.apiUrl + '/stream?max_events=100', {method: 'POST'});
-    this.bannerMessage = `Simulated fraud burst for ${victim} & detected anomalies in real time!`;
+    const streamRes = await fetch(this.apiUrl + '/stream?max_events=100', {method: 'POST'}).then(r => r.json());
+    const count = streamRes.alerts_emitted || (streamRes.alerts || []).length || 0;
+    this.bannerMessage = `Simulated attack for ${victim}: Detected ${count} real-time fraud alerts!`;
+    this.fraudFilter = 'ALL';
     await this.fetchAll();
+    this.setTab('fraud');
    } catch(e){
     this.bannerMessage = 'Fraud simulation error: ' + e;
    } finally {

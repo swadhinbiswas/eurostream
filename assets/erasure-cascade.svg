@@ -1,0 +1,125 @@
+<svg width="920" height="420" viewBox="0 0 920 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+<title id="title">EuroStream — GDPR Article 17 Six-Layer Right-to-Erasure Cascade</title>
+<desc id="desc">Visual technical specification of the 6-layer deletion cascade across memory, raw Bronze, Silver dimensions, Gold aggregates, streaming state, and public Parquet lake</desc>
+<defs>
+  <linearGradient id="grad-del" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f43f5e"/><stop offset="100%" stop-color="#9f1239"/></linearGradient>
+  <linearGradient id="grad-audit" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#10b981"/><stop offset="100%" stop-color="#047857"/></linearGradient>
+  <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.12"/></filter>
+  <style>
+    .bg { fill: #0b0f19; }
+    .step-box { fill: #131b2e; stroke: #1e293b; stroke-width: 1.2; rx: 10px; }
+    .step-num { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 800; }
+    .step-title { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; font-size: 11px; font-weight: 700; fill: #f8fafc; }
+    .step-desc { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; font-size: 9.5px; fill: #94a3b8; }
+    .step-code { font-family: 'JetBrains Mono', monospace; font-size: 8.5px; fill: #38bdf8; }
+    .badge-tag { font-family: 'JetBrains Mono', monospace; font-size: 8px; font-weight: 700; }
+    .flow-step { stroke: #f43f5e; stroke-width: 1.5; stroke-dasharray: 4 4; fill: none; animation: dash 1.2s linear infinite; }
+    @keyframes dash { to { stroke-dashoffset: -8; } }
+  </style>
+</defs>
+
+<rect width="920" height="420" rx="16" class="bg"/>
+
+<!-- Title Block -->
+<g transform="translate(30, 24)">
+  <text x="0" y="20" style="font-family: 'Inter', sans-serif; font-size: 16px; font-weight: 800; letter-spacing: -0.02em; fill: #f8fafc;">GDPR ARTICLE 17 TRANSACTIONAL CASCADE</text>
+  <text x="0" y="38" style="font-family: 'Inter', sans-serif; font-size: 11px; fill: #94a3b8;">Deterministic 6-layer deletion lifecycle with durable suppression registry &amp; cryptographic audit trail</text>
+</g>
+
+<!-- Intake Banner -->
+<g transform="translate(620, 20)">
+  <rect width="270" height="42" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="14" y="18" class="badge-tag" fill="#f43f5e">DSAR INTAKE TRIGGER</text>
+  <text x="14" y="32" class="step-code">POST /erasure-requests {"id":"cust_42"}</text>
+  <text x="256" y="26" text-anchor="end" class="badge-tag" fill="#34d399">SLA &lt; 60s</text>
+</g>
+
+<!-- ================= 6 CASCADE STEPS (2 columns x 3 rows) ================= -->
+
+<!-- STEP 1: SUPPRESSION REGISTRY -->
+<g transform="translate(30, 80)" filter="url(#shadow)">
+  <rect width="420" height="88" class="step-box"/>
+  <rect width="420" height="3" rx="1.5" fill="#f59e0b"/>
+  <circle cx="28" cy="28" r="14" fill="#f59e0b" opacity="0.15"/>
+  <text x="28" y="32" text-anchor="middle" class="step-num" fill="#f59e0b">01</text>
+  <text x="52" y="26" class="step-title">ATOMIC SUPPRESSION REGISTRY</text>
+  <text x="52" y="42" class="step-desc">In-memory set + <tspan class="step-code">governance.suppression_registry</tspan> (DuckDB + Turso).</text>
+  <text x="52" y="58" class="step-desc">Instantly drops newly incoming events across all active workers &amp; threads.</text>
+  <rect x="52" y="66" width="354" height="15" rx="3" fill="#0f172a"/>
+  <text x="58" y="77" class="step-code">Memory.add(cust_id) ➔ Block streaming ingestion in 0.002ms</text>
+</g>
+
+<!-- STEP 2: BRONZE ANONYMIZE -->
+<g transform="translate(470, 80)" filter="url(#shadow)">
+  <rect width="420" height="88" class="step-box"/>
+  <rect width="420" height="3" rx="1.5" fill="#38bdf8"/>
+  <circle cx="28" cy="28" r="14" fill="#38bdf8" opacity="0.15"/>
+  <text x="28" y="32" text-anchor="middle" class="step-num" fill="#38bdf8">02</text>
+  <text x="52" y="26" class="step-title">RAW BRONZE PII ANONYMIZATION</text>
+  <text x="52" y="42" class="step-desc">Preserves row sequence for financial ledger integrity, sanitizes raw PII fields.</text>
+  <text x="52" y="58" class="step-desc">Masks <tspan class="step-code">email</tspan>, <tspan class="step-code">iban</tspan>, <tspan class="step-code">ip_address</tspan> in DuckDB and remote Turso cloud.</text>
+  <rect x="52" y="66" width="354" height="15" rx="3" fill="#0f172a"/>
+  <text x="58" y="77" class="step-code">UPDATE bronze.orders SET email='&lt;anonymized&gt;', iban='&lt;anonymized&gt;'</text>
+</g>
+
+<!-- STEP 3: SILVER DELETE -->
+<g transform="translate(30, 180)" filter="url(#shadow)">
+  <rect width="420" height="88" class="step-box"/>
+  <rect width="420" height="3" rx="1.5" fill="#818cf8"/>
+  <circle cx="28" cy="28" r="14" fill="#818cf8" opacity="0.15"/>
+  <text x="28" y="32" text-anchor="middle" class="step-num" fill="#818cf8">03</text>
+  <text x="52" y="26" class="step-title">SILVER MASKED DIMENSION PURGE</text>
+  <text x="52" y="42" class="step-desc">Hard transactional deletion from deduplicated customer &amp; order entities.</text>
+  <text x="52" y="58" class="step-desc">Removes all salted SHA-256 dimension keys to prevent re-identification linkage.</text>
+  <rect x="52" y="66" width="354" height="15" rx="3" fill="#0f172a"/>
+  <text x="58" y="77" class="step-code">DELETE FROM silver.customers, silver.orders, silver.payments</text>
+</g>
+
+<!-- STEP 4: GOLD DELETE -->
+<g transform="translate(470, 180)" filter="url(#shadow)">
+  <rect width="420" height="88" class="step-box"/>
+  <rect width="420" height="3" rx="1.5" fill="#34d399"/>
+  <circle cx="28" cy="28" r="14" fill="#34d399" opacity="0.15"/>
+  <text x="28" y="32" text-anchor="middle" class="step-num" fill="#34d399">04</text>
+  <text x="52" y="26" class="step-title">GOLD CURATED AGGREGATE REMOVAL</text>
+  <text x="52" y="42" class="step-desc">Eliminates Customer 360 profiles, marketing flags, and order metrics.</text>
+  <text x="52" y="58" class="step-desc">Purges business aggregates across DuckDB and synchronized Turso replica.</text>
+  <rect x="52" y="66" width="354" height="15" rx="3" fill="#0f172a"/>
+  <text x="58" y="77" class="step-code">DELETE FROM gold.customer_360, gold.order_facts, gold.fraud_summary</text>
+</g>
+
+<!-- STEP 5: FRAUD PURGE -->
+<g transform="translate(30, 280)" filter="url(#shadow)">
+  <rect width="420" height="88" class="step-box"/>
+  <rect width="420" height="3" rx="1.5" fill="#f43f5e"/>
+  <circle cx="28" cy="28" r="14" fill="#f43f5e" opacity="0.15"/>
+  <text x="28" y="32" text-anchor="middle" class="step-num" fill="#f43f5e">05</text>
+  <text x="52" y="26" class="step-title">STREAMING STATE EVACUATION</text>
+  <text x="52" y="42" class="step-desc">Evacuates rolling window velocity counts, z-score deques, &amp; geo state.</text>
+  <text x="52" y="58" class="step-desc">Deletes historical bronze alert logs so erased subjects have zero traces.</text>
+  <rect x="52" y="66" width="354" height="15" rx="3" fill="#0f172a"/>
+  <text x="58" y="77" class="step-code">FraudScorer.evacuate(cust_id) + DELETE FROM bronze.fraud_alerts</text>
+</g>
+
+<!-- STEP 6: LAKE RE-SNAPSHOT -->
+<g transform="translate(470, 280)" filter="url(#shadow)">
+  <rect width="420" height="88" class="step-box"/>
+  <rect width="420" height="3" rx="1.5" fill="#06b6d4"/>
+  <circle cx="28" cy="28" r="14" fill="#06b6d4" opacity="0.15"/>
+  <text x="28" y="32" text-anchor="middle" class="step-num" fill="#06b6d4">06</text>
+  <text x="52" y="26" class="step-title">PUBLIC PARQUET LAKE RE-SNAPSHOT</text>
+  <text x="52" y="42" class="step-desc">Atomically regenerates de-identified Silver/Gold Parquet dataset partitions.</text>
+  <text x="52" y="58" class="step-desc">Replaces lake files so public ML/BI consumers never encounter ghost records.</text>
+  <rect x="52" y="66" width="354" height="15" rx="3" fill="#0f172a"/>
+  <text x="58" y="77" class="step-code">COPY silver.*, gold.* TO 'data/lake/*.parquet' (FORMAT PARQUET)</text>
+</g>
+
+<!-- ================= FOOTER PROOF & AUDIT TRAIL ================= -->
+<g transform="translate(30, 380)">
+  <rect width="860" height="30" rx="6" fill="#111827" stroke="#1f2937"/>
+  <text x="16" y="19" class="badge-tag" fill="#34d399">✔ TAMPER-EVIDENT AUDIT TRAIL</text>
+  <text x="200" y="19" class="step-code">DB-First ➔ governance.erasure_audit_log (request_id, customer_id, completed_at, confirmation_hash)</text>
+  <text x="844" y="19" text-anchor="end" class="badge-tag" fill="#38bdf8">hash = sha256(req_id:cust_id)[:16]</text>
+</g>
+
+</svg>
