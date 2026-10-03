@@ -33,6 +33,8 @@ _HELP = {
     "erasure_queue_depth": "Erasure requests waiting to be executed.",
     "malformed_erasure_requests": "Erasure records dropped as unparseable.",
     "rate_limited_requests": "Mutating requests rejected by the per-client rate limiter.",
+    "alert_streams_opened": "Server-Sent Event connections opened on the live alert feed.",
+    "alert_stream_events": "Alert frames delivered over the live SSE feed.",
     "idempotent_replays": "Erasure POSTs answered from the idempotency cache.",
     "idempotency_conflicts": "Erasure POSTs rejected for reusing a key on another customer.",
     "http_success_ratio": "Share of requests in the rolling window that were not 5xx.",

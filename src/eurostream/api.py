@@ -2,23 +2,25 @@ from __future__ import annotations
 
 import logging
 import math
+import queue
 import random
 import re
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from eurostream import __version__
+from eurostream.alerts import AlertBroker, format_event, parse_last_event_id
 from eurostream.config import Settings
 from eurostream.dashboard import get_dashboard_html
 from eurostream.governance.erasure import ErasureAudit, ErasureService
@@ -36,7 +38,7 @@ from eurostream.orchestration import DAG, DAGTask
 from eurostream.producers import ClickProducer, OrderProducer, PaymentProducer
 from eurostream.quality import DataQualityEngine
 from eurostream.ratelimit import RateLimiter
-from eurostream.streaming import FraudScorer, FraudStreamProcessor
+from eurostream.streaming import FraudAlert, FraudScorer, FraudStreamProcessor
 from eurostream.warehouse import Warehouse
 
 logger = logging.getLogger(__name__)
@@ -281,6 +283,8 @@ def create_app(
     """
     effective_backend = backend or _bus_backend(bus)
     requested_backend = settings.event_bus_backend
+    # Live alert fan-out for GET /stream/alerts (see eurostream.alerts).
+    broker = AlertBroker()
     # Retry safety for the one endpoint that deletes data (see idempotency.py).
     idempotency = IdempotencyStore()
     # Per-client pacing for the routes that change state (see ratelimit.py).
@@ -330,6 +334,9 @@ def create_app(
         license_info={"name": "MIT"},
         servers=[{"url": "/", "description": "This server"}],
     )
+    # Exposed for the dashboard/tests: publish an alert and watch it leave
+    # through GET /stream/alerts.
+    app.state.alert_broker = broker
 
     origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
     wildcard = "*" in origins
@@ -484,6 +491,7 @@ def create_app(
             "customer_360": "/gold/customer-360",
             "fraud_summary": "/gold/fraud_summary",
             "fraud_alerts": "/fraud_alerts",
+            "alerts_sse": "/stream/alerts",
             "data_quality_runs": "/governance/data_quality_runs",
             "suppression_registry": "/governance/suppression-registry",
             "watermarks": "/governance/watermarks",
@@ -514,6 +522,7 @@ def create_app(
                 "enabled": limiter.enabled,
                 "rejected": limiter.rejected,
             },
+            "alerts": broker.stats(),
         }
         if warehouse is not None:
             try:
@@ -941,6 +950,11 @@ def create_app(
         if bus is None or warehouse is None:
             return service_unavailable("event bus or warehouse is not wired into this server")
         scorer = FraudScorer(settings, metrics)
+
+        def publish_alert(alert: FraudAlert) -> None:
+            # Fan out to anyone watching GET /stream/alerts while we score.
+            broker.publish(alert.to_dict())
+
         processor = FraudStreamProcessor(
             consumer=bus.consumer("payments", "api-fraud-stream", auto_offset_reset="earliest"),
             scorer=scorer,
@@ -948,6 +962,7 @@ def create_app(
             output_producer=bus,
             alert_topic="fraud_alerts",
             suppression_check=erasure.is_suppressed,
+            on_alert=publish_alert,
         )
         alerts = processor.run(max_events=max_events)
         warehouse.ingest_fraud_alerts([a.to_dict() for a in alerts])
@@ -957,6 +972,106 @@ def create_app(
             "alerts_emitted": len(alerts),
             "alerts": [a.to_dict() for a in alerts[:20]],
         }
+
+    @app.get(
+        "/stream/alerts",
+        tags=["pipeline"],
+        summary="Live fraud alerts as Server-Sent Events",
+        response_class=StreamingResponse,
+        responses={
+            200: {
+                "description": (
+                    "`text/event-stream` of fraud alerts as they are scored. "
+                    "Each frame carries `id` (the resume point), `event: alert` "
+                    "and a JSON `data` payload. A `: ping` comment is emitted "
+                    "every `heartbeat` seconds so proxies keep the connection open."
+                ),
+                "content": {"text/event-stream": {}},
+            },
+        },
+    )
+    def stream_alerts(
+        since: int | None = Query(
+            default=None,
+            ge=0,
+            description=(
+                "Replay buffered alerts after this event id. Defaults to the "
+                "standard `Last-Event-ID` header (browsers send it on reconnect); "
+                "with neither, the stream starts live."
+            ),
+        ),
+        last_event_id: Annotated[
+            str | None,
+            Header(alias="Last-Event-ID", description="Event id of the last frame this client saw"),
+        ] = None,
+        heartbeat: float = Query(
+            default=15.0, ge=0.1, le=60.0, description="Seconds between `: ping` comments"
+        ),
+        duration: float | None = Query(
+            default=None,
+            ge=0.0,
+            le=3600.0,
+            description="Close the stream after this many seconds (omit to stream until disconnect)",
+        ),
+    ) -> StreamingResponse:
+        """Server-Sent Events feed of fraud alerts scored by `POST /stream`.
+
+        Reconnecting clients resume without a gap: send `Last-Event-ID` (or
+        `?since=`) and the buffered events after it are replayed before the
+        live tail.
+        """
+        resume = since if since is not None else parse_last_event_id(last_event_id)
+        # Only a client that states a resume point gets history back; a fresh
+        # browser tab should not be flooded with the buffer.
+        replay_history = since is not None or last_event_id is not None
+        metrics.incr("alert_streams_opened")
+        served = 0
+
+        def events() -> Iterator[str]:
+            nonlocal served
+            subscriber, snapshot = broker.subscribe()
+            cursor = resume
+            started = time.monotonic()
+            try:
+                # Tell the browser how quickly to reconnect if we drop.
+                yield "retry: 3000\n\n"
+                if replay_history:
+                    for seq, payload in snapshot:
+                        if seq > cursor:
+                            yield format_event(seq, payload)
+                            cursor = seq
+                            served += 1
+                while True:
+                    elapsed = time.monotonic() - started
+                    if duration is not None and elapsed >= duration:
+                        return
+                    timeout = heartbeat
+                    if duration is not None:
+                        timeout = max(0.05, min(heartbeat, duration - elapsed))
+                    try:
+                        seq, payload = subscriber.get(timeout=timeout)
+                    except queue.Empty:
+                        yield ": ping\n\n"
+                        continue
+                    if seq <= cursor:
+                        continue
+                    yield format_event(seq, payload)
+                    cursor = seq
+                    served += 1
+            finally:
+                # Runs on disconnect too: never leak a subscriber queue.
+                broker.unsubscribe(subscriber)
+                metrics.incr("alert_stream_events", served)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
 
     @app.post(
         "/transform",
