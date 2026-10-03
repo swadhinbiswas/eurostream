@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 
 from fastapi.testclient import TestClient
 
@@ -321,3 +322,130 @@ def test_api_interactive_triggers_and_verification(tmp_path):
 
     bus.close()
     warehouse.close()
+
+
+def _app_with_erasure(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        warehouse_path=tmp_path / "data" / "eurocart.duckdb",
+        audit_log_path=tmp_path / "data" / "logs" / "audit.jsonl",
+        metrics_path=tmp_path / "data" / "logs" / "metrics.jsonl",
+        pii_manifest_path=tmp_path / "governance" / "pii_manifest.json",
+        event_bus_backend="sqlite",
+    )
+    bus = open_bus(tmp_path / "events.db")
+    warehouse = Warehouse(tmp_path / "eurocart.duckdb")
+    metrics = Metrics(tmp_path / "metrics.jsonl")
+    erasure = ErasureService(
+        warehouse=warehouse,
+        producer=bus,
+        consumer=bus.consumer("erasure_requests", "lifecycle-test", auto_offset_reset="earliest"),
+        audit_log_path=settings.audit_log_path,
+        metrics=metrics,
+    )
+    app = create_app(erasure, metrics, settings, warehouse, bus, start_worker=False)
+    return app, bus, warehouse, erasure
+
+
+def test_erasure_request_status_lifecycle(tmp_path):
+    """202 leaves a readable `queued` record; the audit row finishes it."""
+    app, bus, wh, erasure = _app_with_erasure(tmp_path)
+    c = TestClient(app)
+
+    accepted = c.post("/erasure-requests", json={"customer_id": "cust_lifecycle"})
+    assert accepted.status_code == 202
+    rid = accepted.json()["request_id"]
+
+    status = c.get(f"/erasure-requests/{rid}")
+    assert status.status_code == 200
+    body = status.json()
+    assert body["status"] == "queued"
+    assert body["customer_id"] == "cust_lifecycle"
+    assert body["completed_at"] is None
+    assert body["layers_touched"] == []
+
+    from eurostream.models import ErasureRequested
+
+    audit = erasure.execute(
+        ErasureRequested(
+            event_id=rid,
+            occurred_at=time.time(),
+            request_id=rid,
+            customer_id="cust_lifecycle",
+        )
+    )
+    assert audit.status == "completed"
+
+    status = c.get(f"/erasure-requests/{rid}")
+    assert status.status_code == 200
+    body = status.json()
+    assert body["status"] == "completed"
+    assert body["completed_at"] is not None
+    assert body["duration_seconds"] >= 0
+    assert "suppression_registry" in body["layers_touched"]
+    assert body["confirmation_hash"]
+    # Once the audit row exists the intake entry is gone, not duplicated.
+    assert erasure.pending_request(rid) is None
+    bus.close()
+    wh.close()
+
+
+def test_erasure_request_status_unknown_id_is_404_problem_json(tmp_path):
+    app, bus, wh, _ = _app_with_erasure(tmp_path)
+    c = TestClient(app)
+    r = c.get("/erasure-requests/nope-does-not-exist")
+    assert r.status_code == 404
+    assert r.headers["content-type"].startswith("application/problem+json")
+    assert r.json()["title"] == "Not found"
+    bus.close()
+    wh.close()
+
+
+def test_erasure_request_status_rejects_injection(tmp_path):
+    app, bus, wh, _ = _app_with_erasure(tmp_path)
+    c = TestClient(app)
+    assert c.get("/erasure-requests/abc'%20OR%201=1--").status_code == 422
+    assert c.get("/erasure-requests/" + "x" * 200).status_code == 422
+    bus.close()
+    wh.close()
+
+
+def test_list_erasure_requests_filters_and_pages(tmp_path):
+    app, bus, wh, erasure = _app_with_erasure(tmp_path)
+    c = TestClient(app)
+
+    for customer in ("cust_a", "cust_b", "cust_c"):
+        assert c.post("/erasure-requests", json={"customer_id": customer}).status_code == 202
+
+    everything = c.get("/erasure-requests")
+    assert everything.status_code == 200
+    assert everything.json()["total"] == 3
+    assert len(everything.json()["items"]) == 3
+
+    # Paging
+    page = c.get("/erasure-requests", params={"limit": 2, "offset": 2})
+    assert page.json()["total"] == 3
+    assert len(page.json()["items"]) == 1
+
+    # Status filter (all three are still queued: no worker runs here)
+    queued = c.get("/erasure-requests", params={"status": "queued"})
+    assert queued.json()["total"] == 3
+    empty = c.get("/erasure-requests", params={"status": "failed"})
+    assert empty.json()["total"] == 0
+
+    # Customer filter
+    one = c.get("/erasure-requests", params={"customer_id": "cust_b"})
+    assert one.json()["total"] == 1
+    assert one.json()["items"][0]["customer_id"] == "cust_b"
+
+    # An impossible status is a validation error, not a silent empty list
+    assert c.get("/erasure-requests", params={"status": "invented"}).status_code == 422
+    assert c.get("/erasure-requests", params={"limit": 0}).status_code == 422
+
+    # Executed requests join the list with their verdict
+    c.post("/erasure-requests", json={"customer_id": "cust_d", "sync": True})
+    done = c.get("/erasure-requests", params={"status": "completed"})
+    assert done.json()["total"] >= 1
+    assert done.json()["items"][0]["duration_seconds"] >= 0
+    bus.close()
+    wh.close()

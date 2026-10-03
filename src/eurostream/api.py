@@ -185,6 +185,66 @@ class ErasureRequest(BaseModel):
     )
 
 
+#: Identifier length bound for a request id path parameter.
+REQUEST_ID_MAX = 128
+
+ErasureRequestId = Annotated[
+    str,
+    Path(
+        pattern=rf"^[A-Za-z0-9_.\-]{{1,{REQUEST_ID_MAX}}}$",
+        description="Erasure request id (as returned in `request_id`)",
+    ),
+]
+
+#: Every status an erasure request can be in, from intake to verdict.
+ERASURE_STATUSES = ("queued", "executing", "completed", "failed", "completed_with_errors")
+
+
+def _pending_item(entry: dict[str, object]) -> dict[str, object]:
+    """Shape an intake entry like an audit row, with the absent fields null."""
+    requested_at = entry.get("requested_at")
+    return {
+        "request_id": entry.get("request_id"),
+        "customer_id": entry.get("customer_id"),
+        "status": entry.get("status"),
+        "requested_at": requested_at if isinstance(requested_at, (int, float)) else None,
+        "completed_at": None,
+        "duration_seconds": None,
+        "layers_touched": [],
+        "confirmation_hash": None,
+        "requested_by": entry.get("requested_by"),
+    }
+
+
+def _audit_item(row: dict[str, object]) -> dict[str, object]:
+    """Shape an audit-log row for the API (duration derived, layers split)."""
+    requested_at = row.get("requested_at")
+    completed_at = row.get("completed_at")
+    requested = float(requested_at) if isinstance(requested_at, (int, float)) else None
+    completed = float(completed_at) if isinstance(completed_at, (int, float)) else None
+    layers = [layer for layer in str(row.get("layers_touched") or "").split(",") if layer]
+    duration = (
+        round(completed - requested, 3) if requested is not None and completed is not None else None
+    )
+    return {
+        "request_id": row.get("request_id"),
+        "customer_id": row.get("customer_id"),
+        "status": row.get("status"),
+        "requested_at": requested,
+        "completed_at": completed,
+        "duration_seconds": duration,
+        "layers_touched": layers,
+        "confirmation_hash": row.get("confirmation_hash"),
+        "requested_by": None,
+    }
+
+
+def _requested_ts(item: dict[str, object]) -> float:
+    """Sort key for request timestamps; missing/odd values sort oldest."""
+    value = item.get("requested_at")
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
 def _bus_backend(bus: Any) -> str:
     """Report the backend actually in use, not the one that was requested."""
     if bus is None:
@@ -393,6 +453,8 @@ def create_app(
             "suppression_registry": "/governance/suppression-registry",
             "watermarks": "/governance/watermarks",
             "erasure_verify": "/verify-erasure/{customer_id}",
+            "erasure_requests": "/erasure-requests",
+            "erasure_request_status": "/erasure-requests/{request_id}",
             "turso_status": "/turso/status",
         }
 
@@ -534,6 +596,84 @@ def create_app(
             "status": "queued",
             "sla_seconds": settings.erasure_sla_seconds,
         }
+
+    @app.get(
+        "/erasure-requests",
+        tags=["governance"],
+        summary="List erasure requests, queued and executed",
+        responses={
+            422: {"description": "Invalid status, customer id or paging values"},
+            503: {"description": "Warehouse is not configured"},
+        },
+    )
+    def list_erasure_requests(
+        status: str | None = Query(
+            default=None,
+            pattern="^(" + "|".join(ERASURE_STATUSES) + ")$",
+            description="Only return requests in this state",
+        ),
+        customer_id: str | None = Query(
+            default=None,
+            pattern=CUSTOMER_ID_PATTERN.pattern,
+            description="Only return requests for this customer",
+        ),
+        limit: int = Query(default=50, ge=1, le=200, description="Page size"),
+        offset: int = Query(default=0, ge=0, description="Rows to skip"),
+    ) -> dict[str, object]:
+        """Merges the intake queue (accepted, not yet executed) with the
+        durable audit log, newest first. Reads are pinned to the local
+        warehouse so a compliance list never answers from a stale replica."""
+        items = [_pending_item(entry) for entry in erasure.pending_requests()]
+        wh = require_warehouse()
+        items.extend(
+            _audit_item(row)
+            for row in wh.query(
+                "SELECT request_id, customer_id, requested_at, completed_at, "
+                "layers_touched, status, confirmation_hash "
+                "FROM governance.erasure_audit_log",
+                local_only=True,
+            )
+        )
+        if status is not None:
+            items = [item for item in items if item["status"] == status]
+        if customer_id is not None:
+            items = [item for item in items if item["customer_id"] == customer_id]
+        items.sort(key=_requested_ts, reverse=True)
+        return {
+            "total": len(items),
+            "limit": limit,
+            "offset": offset,
+            "items": items[offset : offset + limit],
+        }
+
+    @app.get(
+        "/erasure-requests/{request_id}",
+        tags=["governance"],
+        summary="Status of one erasure request",
+        responses={
+            404: {"description": "No such request id"},
+            422: {"description": "Invalid request id"},
+            503: {"description": "Warehouse is not configured and the id is not queued"},
+        },
+    )
+    def erasure_request_status(request_id: ErasureRequestId) -> dict[str, object]:
+        """Answers with the intake entry while the request is queued or
+        executing and with the audit row once the cascade finished — one URL
+        for the whole 202-to-verdict lifecycle."""
+        pending = erasure.pending_request(request_id)
+        if pending is not None:
+            return _pending_item(pending)
+        wh = require_warehouse()
+        rows = wh.query(
+            "SELECT request_id, customer_id, requested_at, completed_at, "
+            "layers_touched, status, confirmation_hash "
+            "FROM governance.erasure_audit_log WHERE request_id = ?",
+            (request_id,),
+            local_only=True,
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail=f"no erasure request with id {request_id}")
+        return _audit_item(rows[0])
 
     @app.post(
         "/erase/{customer_id}",

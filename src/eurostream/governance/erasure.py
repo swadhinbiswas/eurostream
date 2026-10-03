@@ -79,6 +79,12 @@ class ErasureService:
         # warehouse, so suppression survives process restarts.
         self._suppressed: set[str] = set(warehouse.suppressed_ids())
         self._lock = threading.Lock()
+        # Intake state: what has been accepted but has not finished, so
+        # `GET /erasure-requests/{id}` can answer "queued" honestly instead of
+        # 404ing between the 202 and the audit row. Bounded: a queue nobody
+        # drains must not grow without limit.
+        self._pending: dict[str, dict[str, object]] = {}
+        self._pending_limit = 10_000
 
     # ---- public interface ----
 
@@ -103,6 +109,14 @@ class ErasureService:
             headers={"schema_version": str(evt.schema_version), "event_type": evt.event_type},
         )
         self._metrics.incr("erasure_requested")
+        with self._lock:
+            self._track_locked(
+                request_id=evt.request_id,
+                customer_id=customer_id,
+                requested_at=evt.occurred_at,
+                status="queued",
+                requested_by=requested_by,
+            )
         return evt.request_id
 
     def execute(self, event: ErasureRequested) -> ErasureAudit:
@@ -118,6 +132,19 @@ class ErasureService:
         layers: list[str] = []
         with self._lock:
             self._suppressed.add(event.customer_id)
+            entry = self._pending.get(event.request_id)
+            if entry is None:
+                # A tombstone can arrive from another process (bus replay, the
+                # CLI); track it here so the status endpoint still works.
+                self._track_locked(
+                    request_id=event.request_id,
+                    customer_id=event.customer_id,
+                    requested_at=event.occurred_at,
+                    status="executing",
+                )
+            else:
+                entry["status"] = "executing"
+                entry["started_at"] = started
         # Durable record so streaming consumers in other processes see the
         # suppression too (they seed their in-memory set from this table).
         self._warehouse.add_suppressed(event.customer_id, added_at=started)
@@ -142,6 +169,8 @@ class ErasureService:
                 self._append_audit(failure)
             except Exception:
                 logger.exception("could not record failed erasure %s", event.request_id)
+            finally:
+                self._pop_pending(event.request_id)
             self._metrics.incr("erasure_failed")
             logger.exception(
                 "erasure cascade failed: request=%s customer=%s layers=%s",
@@ -171,6 +200,7 @@ class ErasureService:
                 self._metrics.incr("erasure_lake_export_failed")
                 logger.exception("lake re-export failed for erasure %s", event.request_id)
         self._append_audit(audit)
+        self._pop_pending(event.request_id)
         # SLA is end-to-end from request time, not worker start, so queue time counts.
         latency = audit.completed_at - audit.requested_at
         self._metrics.observe("erasure_latency", latency)
@@ -191,6 +221,17 @@ class ErasureService:
             audit.confirmation_hash,
         )
         return audit
+
+    def pending_requests(self) -> list[dict[str, object]]:
+        """Snapshot of accepted-but-unfinished requests, oldest first."""
+        with self._lock:
+            entries = [dict(e) for e in self._pending.values()]
+        return sorted(entries, key=_requested_at)
+
+    def pending_request(self, request_id: str) -> dict[str, object] | None:
+        with self._lock:
+            entry = self._pending.get(request_id)
+            return dict(entry) if entry is not None else None
 
     def is_suppressed(self, customer_id: str) -> bool:
         with self._lock:
@@ -255,6 +296,39 @@ class ErasureService:
             logger.exception("could not dead-letter erasure request")
 
     # ---- internals ----
+
+    def _track_locked(
+        self,
+        *,
+        request_id: str,
+        customer_id: str,
+        requested_at: float,
+        status: str,
+        requested_by: str | None = None,
+    ) -> None:
+        """Record intake state. Caller holds ``self._lock``."""
+        while len(self._pending) >= self._pending_limit:
+            oldest = min(self._pending, key=lambda k: _requested_at(self._pending[k]))
+            evicted = self._pending.pop(oldest, None)
+            logger.warning(
+                "pending erasure registry full; evicted oldest %s (still unexecuted)",
+                oldest,
+            )
+            if evicted is None:  # pragma: no cover - defensive against a torn dict
+                break
+        entry: dict[str, object] = {
+            "request_id": request_id,
+            "customer_id": customer_id,
+            "requested_at": requested_at,
+            "status": status,
+        }
+        if requested_by is not None:
+            entry["requested_by"] = requested_by
+        self._pending[request_id] = entry
+
+    def _pop_pending(self, request_id: str) -> None:
+        with self._lock:
+            self._pending.pop(request_id, None)
 
     def _anonymize_warehouse(self, customer_id: str) -> bool:
         """Anonymize Bronze and delete the customer from Silver/Gold.
@@ -376,6 +450,12 @@ class ErasureService:
                 fh.write(json.dumps(audit.to_dict()) + "\n")
         except Exception:
             logger.exception("failed to append audit JSONL for %s", audit.request_id)
+
+
+def _requested_at(entry: dict[str, object]) -> float:
+    """Intake timestamp as float; a missing field sorts first, not last."""
+    value = entry.get("requested_at")
+    return float(value) if isinstance(value, (int, float)) else 0.0
 
 
 def _new_id() -> str:
