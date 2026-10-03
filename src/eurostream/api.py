@@ -10,6 +10,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from functools import partial
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request, Response
@@ -38,6 +39,7 @@ from eurostream.orchestration import DAG, DAGTask
 from eurostream.producers import ClickProducer, OrderProducer, PaymentProducer
 from eurostream.quality import DataQualityEngine
 from eurostream.ratelimit import RateLimiter
+from eurostream.resilience import RetryPolicy, call_with_retry
 from eurostream.streaming import FraudAlert, FraudScorer, FraudStreamProcessor
 from eurostream.warehouse import Warehouse
 
@@ -163,13 +165,22 @@ class _LakeFallback:
             import duckdb
 
             hf_base = f"hf://datasets/{cleaned}"
+            # A remote parquet read over hf:// fails transiently (cold cache,
+            # hub hiccup); one jittered second attempt costs less than
+            # reporting an empty lake. Anything else is a real miss.
+            lake_retry = RetryPolicy(attempts=2, base_delay=0.15)
+
+            def read_count(tbl: str) -> int:
+                row = duckdb.query(
+                    f"SELECT count(*) FROM read_parquet('{hf_base}/{tbl}.parquet')"  # noqa: S608
+                ).fetchone()
+                return int(row[0]) if row and row[0] else 0
+
             for tbl, key in tables:
                 try:
-                    row = duckdb.query(
-                        f"SELECT count(*) FROM read_parquet('{hf_base}/{tbl}.parquet')"  # noqa: S608
-                    ).fetchone()
-                    if row and row[0]:
-                        out[key] = int(row[0])
+                    count = call_with_retry(partial(read_count, tbl), policy=lake_retry)
+                    if count:
+                        out[key] = count
                 except Exception as e:
                     logger.debug("lake fallback %s failed: %s", tbl, e)
         except Exception as e:
@@ -1463,6 +1474,9 @@ def create_app(
         return {
             "connected": connected,
             "endpoint": wh.turso.http_endpoint if connected and wh.turso else None,
+            # Breaker + retry telemetry: `state` is what the next write will
+            # hit — open means it is being refused without a call.
+            "circuit": wh.turso.status() if connected and wh.turso else None,
             "table_counts": table_counts,
             "table_errors": table_errors,
         }

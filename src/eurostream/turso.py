@@ -5,9 +5,17 @@ import logging
 import math
 import re
 from collections.abc import Sequence
+from functools import partial
 from typing import Any
 
 import httpx
+
+from eurostream.resilience import (
+    CircuitBreaker,
+    RetryPolicy,
+    call_with_retry,
+    http_status_is_retryable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +155,17 @@ class TursoClient:
     and automatic retry / error isolation.
     """
 
-    def __init__(self, database_url: str, auth_token: str) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        auth_token: str,
+        *,
+        retry_attempts: int = 3,
+        retry_base_delay: float = 0.2,
+        failure_threshold: int = 5,
+        recovery_seconds: float = 30.0,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
         self.raw_url = database_url.strip().strip("\"' \t\r\n")
         raw_token = auth_token.strip().strip("\"' \t\r\n")
         if raw_token.lower().startswith("bearer "):
@@ -174,9 +192,25 @@ class TursoClient:
                 "Authorization": f"Bearer {self.auth_token}",
                 "Content-Type": "application/json",
             },
+            transport=transport,
         )
         self._native_conn: Any = None
         self._init_native()
+
+        # Transient failures (503, dropped socket) get a jittered retry; a
+        # dependency that keeps failing gets refused by the breaker instead
+        # of tying up a worker for the full 15s timeout on every write.
+        self._retry_policy = RetryPolicy(
+            attempts=retry_attempts,
+            base_delay=retry_base_delay,
+            max_delay=max(1.0, retry_base_delay * 8),
+        )
+        self._breaker = CircuitBreaker(
+            "turso",
+            failure_threshold=failure_threshold,
+            recovery_seconds=recovery_seconds,
+        )
+        self._retries = 0
 
     def _init_native(self) -> None:
         try:
@@ -230,9 +264,7 @@ class TursoClient:
             stmt_obj["args"] = [_to_turso_arg(p) for p in params]
 
         body = {"requests": [{"type": "execute", "stmt": stmt_obj}, {"type": "close"}]}
-        resp = self._http_client.post(self.http_endpoint, json=body)
-        resp.raise_for_status()
-        data = resp.json()
+        data = self._breaker.call(lambda: self._post(body))
         results = data.get("results", [])
         if results and results[0].get("type") == "error":
             raise RuntimeError(f"Turso execute error: {results[0].get('error')}")
@@ -270,9 +302,10 @@ class TursoClient:
                 for params in chunk
             ]
             requests.append({"type": "close"})
-            resp = self._http_client.post(self.http_endpoint, json={"requests": requests})
-            resp.raise_for_status()
-            data = resp.json()
+            chunk_body: dict[str, Any] = {"requests": requests}
+            # partial, not a lambda: a closure over the loop variable would
+            # need a # noqa for B023 and buy nothing here.
+            data = self._breaker.call(partial(self._post, chunk_body))
             for r in data.get("results", []):
                 if r.get("type") == "error":
                     raise RuntimeError(f"Turso executemany error: {r.get('error')}")
@@ -303,9 +336,7 @@ class TursoClient:
             stmt_obj["args"] = [_to_turso_arg(p) for p in params]
 
         body = {"requests": [{"type": "execute", "stmt": stmt_obj}, {"type": "close"}]}
-        resp = self._http_client.post(self.http_endpoint, json=body)
-        resp.raise_for_status()
-        data = resp.json()
+        data = self._breaker.call(lambda: self._post(body))
         results = data.get("results", [])
         if results and results[0].get("type") == "error":
             raise RuntimeError(f"Turso query error: {results[0].get('error')}")
@@ -323,6 +354,47 @@ class TursoClient:
                 out.append(d)
             return out
         return []
+
+    # ---- resilient transport ----
+
+    def _post(self, body: dict[str, Any]) -> dict[str, Any]:
+        """POST a pipeline body with jittered retries on transient failures."""
+
+        def attempt() -> dict[str, Any]:
+            resp = self._http_client.post(self.http_endpoint, json=body)
+            resp.raise_for_status()
+            payload: dict[str, Any] = resp.json()
+            return payload
+
+        def on_retry(n: int, exc: Exception, delay: float) -> None:
+            self._retries += 1
+            logger.debug(
+                "turso retry %d/%d after %s in %.2fs",
+                n,
+                self._retry_policy.attempts,
+                exc,
+                delay,
+            )
+
+        return call_with_retry(
+            attempt,
+            policy=self._retry_policy,
+            should_retry=http_status_is_retryable,
+            on_retry=on_retry,
+        )
+
+    @property
+    def circuit(self) -> CircuitBreaker:
+        return self._breaker
+
+    def status(self) -> dict[str, object]:
+        """Liveness view for /turso/status: state, trips, retries."""
+        return {
+            **self._breaker.stats(),
+            "retries": self._retries,
+            "endpoint": self.http_endpoint,
+            "native": self._native_conn is not None,
+        }
 
     def scalar(self, sql: str, params: Sequence[Any] | None = None) -> Any:
         rows = self.query(sql, params)
