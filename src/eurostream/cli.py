@@ -416,6 +416,186 @@ def verify_audit(
     raise typer.Exit(1)
 
 
+# ------------------------------------------------------------------- dlq
+DLQ_TOPIC = "erasure_requests_dlq"
+ERASURE_TOPIC = "erasure_requests"
+#: The operator's cursor in the dead-letter log. It only moves when someone
+#: runs `dlq requeue` or `dlq ack`, which is what makes `dlq list` repeatable
+#: and makes requeueing idempotent against an append-only log that has no
+#: delete.
+DLQ_GROUP = "eurostream-dlq"
+
+dlq_app = typer.Typer(
+    help=(
+        "Inspect and replay dead-lettered erasure requests. Records stay in "
+        "the log for audit; only this group's position decides what counts "
+        "as still unhandled."
+    )
+)
+app.add_typer(dlq_app, name="dlq")
+
+
+def _poll_dlq(consumer: Consumer, limit: int) -> list[Record]:
+    """Read up to ``limit`` records from the consumer's current position."""
+    records: list[Record] = []
+    while len(records) < limit:
+        record = consumer.poll(0.05)
+        if record is None:
+            break
+        records.append(record)
+    return records
+
+
+def _describe(record: Record) -> dict[str, object]:
+    """A dead letter as an operator wants to see it: who failed, why, when."""
+    try:
+        payload = record.json_value()
+        request_id = str(payload.get("request_id", ""))
+        customer_id = str(payload.get("customer_id", ""))
+        raw: str | None = None
+    except Exception as exc:  # noqa: BLE001 - the payload is the evidence
+        request_id, customer_id, raw = "", "", f"{type(exc).__name__}: {exc}"
+    return {
+        "offset": record.offset,
+        "reason": record.headers.get("reason", "unknown"),
+        "request_id": request_id,
+        "customer_id": customer_id,
+        "timestamp": record.timestamp,
+        "parse_error": raw,
+        "value": record.value,
+    }
+
+
+def _format_item(item: dict[str, object]) -> str:
+    who = f"customer={item['customer_id']}" if item["customer_id"] else "customer=?"
+    request = f"request={item['request_id']}" if item["request_id"] else "request=?"
+    line = f"  #{item['offset']:<5} {item['reason']}  {who}  {request}"
+    if item["parse_error"]:
+        line += f"\n          unparseable payload ({item['parse_error']})"
+    return line
+
+
+@dlq_app.command("list")
+def dlq_list(
+    limit: int = typer.Option(50, min=1, max=1000, help="Maximum records to show"),
+    check: bool = typer.Option(
+        False, "--check", help="exit 1 when unhandled dead letters exist (for a monitor)"
+    ),
+    json_out: bool = typer.Option(False, "--json", help="print the machine-readable list"),
+) -> None:
+    """Show dead-lettered erasure requests nobody has handled yet."""
+    _, bus, warehouse, _, _ = _fresh()
+    # Read only: this consumer is never committed or closed, because
+    # close() commits and would silently mark the letters as handled.
+    consumer = bus.consumer(DLQ_TOPIC, DLQ_GROUP, auto_offset_reset="earliest")
+    records = _poll_dlq(consumer, limit)
+    items = [_describe(r) for r in records]
+
+    if json_out:
+        typer.echo(json.dumps({"count": len(items), "records": items}, indent=2, default=str))
+    elif not items:
+        typer.secho("no unhandled dead letters — the queue is clear", fg=typer.colors.GREEN)
+    else:
+        for item in items:
+            typer.secho(_format_item(item), fg=typer.colors.YELLOW)
+        typer.echo(
+            f"{len(items)} unhandled dead letter(s) in {DLQ_TOPIC} "
+            f"(handled cursor at offset {consumer.current_offset()})"
+        )
+
+    warehouse.close()
+    bus.close()
+    if check and items:
+        raise typer.Exit(1)
+
+
+@dlq_app.command("requeue")
+def dlq_requeue(
+    limit: int = typer.Option(50, min=1, max=1000, help="Maximum records to republish"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="show what would be republished without moving the cursor"
+    ),
+) -> None:
+    """Republish dead letters onto the intake topic so the worker retries them."""
+    _, bus, warehouse, _, _ = _fresh()
+    consumer = bus.consumer(DLQ_TOPIC, DLQ_GROUP, auto_offset_reset="earliest")
+    records = _poll_dlq(consumer, limit)
+    if not records:
+        warehouse.close()
+        bus.close()
+        typer.secho("nothing to requeue — the queue is clear", fg=typer.colors.GREEN)
+        return
+
+    if dry_run:
+        # Nothing is published and the cursor does not move: a dry run that
+        # republished would be worse than no dry run at all.
+        for record in records:
+            typer.echo(f"[dry-run] would republish offset {record.offset}")
+        typer.echo(f"[dry-run] {len(records)} record(s) left untouched")
+        warehouse.close()
+        bus.close()
+        return
+
+    for record in records:
+        bus.produce(
+            ERASURE_TOPIC,
+            key=record.key or "requeued",
+            value=record.value,
+            headers={**record.headers, "requeued_from": "dlq", "dlq_offset": str(record.offset)},
+        )
+    if hasattr(bus, "flush"):
+        bus.flush()
+
+    # Only now does the cursor move: a republish that failed half way
+    # leaves the remaining letters visible instead of swallowing them.
+    consumer.commit()
+    consumer.close()
+    warehouse.close()
+    bus.close()
+    typer.secho(
+        f"republished {len(records)} dead letter(s) to {ERASURE_TOPIC} — "
+        "the erasure worker will retry them",
+        fg=typer.colors.GREEN,
+    )
+
+
+@dlq_app.command("ack")
+def dlq_ack(
+    limit: int = typer.Option(50, min=1, max=1000, help="Maximum records to acknowledge"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="show what would be acknowledged"),
+) -> None:
+    """Mark dead letters as handled without retrying them.
+
+    The records stay in the log for audit — this only moves the operator's
+    cursor past them, for failures that are known-bad input nobody intends
+    to retry."""
+    _, bus, warehouse, _, _ = _fresh()
+    consumer = bus.consumer(DLQ_TOPIC, DLQ_GROUP, auto_offset_reset="earliest")
+    records = _poll_dlq(consumer, limit)
+    if not records:
+        warehouse.close()
+        bus.close()
+        typer.secho("nothing to acknowledge — the queue is clear", fg=typer.colors.GREEN)
+        return
+
+    if dry_run:
+        for record in records:
+            typer.echo(f"[dry-run] would acknowledge offset {record.offset}")
+        typer.echo(f"[dry-run] {len(records)} record(s) left untouched")
+        warehouse.close()
+        bus.close()
+        return
+
+    consumer.commit()
+    consumer.close()
+    warehouse.close()
+    bus.close()
+    typer.secho(
+        f"acknowledged {len(records)} dead letter(s); they stay in {DLQ_TOPIC} for audit",
+        fg=typer.colors.GREEN,
+    )
+
+
 @app.command()
 def worker(poll_timeout: float = typer.Option(0.2, help="Seconds between polls")) -> None:
     """Run the erasure worker: consume erasure_requests and execute each cascade.
