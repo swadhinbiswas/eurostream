@@ -9,11 +9,12 @@ import shutil
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from uuid import uuid4
 
 import typer
 
+from eurostream import __version__
 from eurostream.bus import Consumer, Record
 from eurostream.bus.sqlite import open_bus
 from eurostream.chaos import SCENARIOS, discard_sandbox, new_sandbox, run_scenarios
@@ -42,6 +43,28 @@ from eurostream.warehouse import Warehouse
 configure_logging()
 
 app = typer.Typer(help="EuroStream — GDPR-compliant real-time analytics platform")
+
+
+def _version_callback(value: bool) -> None:
+    """Print the build and leave, before any setting is read or file opened."""
+    if value:
+        typer.echo(f"eurostream {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _root(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            callback=_version_callback,
+            is_eager=True,
+            help="Show the version and exit.",
+        ),
+    ] = False,
+) -> None:
+    """EuroStream — GDPR-compliant real-time analytics platform."""
 
 
 def _fresh() -> tuple[Settings, Any, Warehouse, Metrics, PIIClassifier]:

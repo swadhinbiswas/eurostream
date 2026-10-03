@@ -16,6 +16,7 @@ from uuid import uuid4
 import pytest
 from typer.testing import CliRunner
 
+from eurostream import __version__
 from eurostream.bus.sqlite import open_bus
 from eurostream.cli import DLQ_TOPIC, ERASURE_TOPIC, _serve_kwargs, app
 from eurostream.config import get_settings
@@ -27,6 +28,21 @@ from eurostream.producers import ClickProducer, EventGenerator, OrderProducer, P
 from eurostream.warehouse import Warehouse
 
 runner = CliRunner()
+
+
+def test_cli_version_reports_the_build():
+    # A release ships three numbers that must agree — pyproject, __version__
+    # and this flag. The release workflow checks the first two against the
+    # tag; this is the one an operator actually runs.
+    res = runner.invoke(app, ["--version"])
+    assert res.exit_code == 0, res.output
+    assert res.stdout.strip() == f"eurostream {__version__}"
+
+
+def test_version_is_eager_so_help_still_works():
+    res = runner.invoke(app, ["--help"])
+    assert res.exit_code == 0
+    assert "--version" in res.stdout
 
 
 def test_cli_contracts(tmp_path):

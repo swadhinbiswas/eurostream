@@ -1,6 +1,6 @@
 [project]
 name = "eurostream"
-version = "0.2.0"
+version = "0.3.0"
 description = "GDPR-oriented streaming fraud detection and medallion lakehouse reference platform"
 readme = "README.md"
 requires-python = ">=3.11"

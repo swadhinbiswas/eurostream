@@ -425,7 +425,7 @@ If you use EuroStream in academic, regulatory, or industrial data engineering re
   author  = {Swadhin Biswas},
   title   = {EuroStream: A GDPR-Native Streaming and Medallion Lakehouse Platform for Sovereign European Commerce},
   year    = {2026},
-  version = {0.2.0},
+  version = {0.3.0},
   url     = {https://github.com/swadhinbiswas/eurostream}
 }
 ```

@@ -314,7 +314,7 @@ wheels = [
 
 [[package]]
 name = "eurostream"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "confluent-kafka", marker = "python_full_version < '3.13'" },

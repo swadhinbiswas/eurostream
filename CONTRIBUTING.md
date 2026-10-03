@@ -65,6 +65,26 @@ uv run eurostream contracts --out governance/contracts.json
 Removing a required field, making a required field optional, or changing a
 type will fail CI until the baseline is consciously regenerated.
 
+## Releasing
+
+A release is: bump the version, move the changelog entries, publish the tag.
+
+1. Set the same number in three places — `version` in `pyproject.toml`,
+   `__version__` in `src/eurostream/__init__.py`, and the BibTeX citation in
+   the README. Under `0.x` the minor is the major: a change to a documented
+   contract (HTTP surface, CLI exit codes, event schemas, `EUROSTREAM_*`
+   keys) means `0.4.0`, not `0.3.1`.
+2. Move what has accumulated under `## [Unreleased]` in `CHANGELOG.md` into a
+   new `## [X.Y.Z] - YYYY-MM-DD` section, **breaking changes first with the
+   migration spelled out**, chore/CI/test noise left out.
+3. Create a GitHub Release for tag `vX.Y.Z`.
+
+`.github/workflows/release.yml` takes it from there: the full gate, `uv
+build`, `twine check --strict`, a version-agreement check (tag == wheel
+metadata == `__version__`), a check that `CHANGELOG.md` has a dated section
+for exactly this version, then PyPI trusted publishing by OIDC. Trigger it
+with `workflow_dispatch` to exercise everything except the upload.
+
 ## Docs site
 
 The cookbook/docs live in `site/` (Astro + Starlight). Run locally with
