@@ -126,6 +126,20 @@ class Settings(BaseSettings):
         ),
     )
 
+    fraud_worker_enabled: bool = Field(
+        default=True,
+        description=(
+            "Score payments in a background thread while the API is up, so "
+            "alerts reach the warehouse and the SSE feed without a manual "
+            "`POST /stream`. The endpoint shares this worker's consumer group, "
+            "so nothing is ever scored twice."
+        ),
+    )
+    fraud_consumer_group: str = Field(
+        default="api-fraud-stream",
+        description="Bus consumer group shared by the worker and POST /stream",
+    )
+
     api_rate_limit: float = Field(
         default=10.0,
         ge=0.0,

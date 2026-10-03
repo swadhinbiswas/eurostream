@@ -285,6 +285,30 @@ def create_app(
     requested_backend = settings.event_bus_backend
     # Live alert fan-out for GET /stream/alerts (see eurostream.alerts).
     broker = AlertBroker()
+
+    def publish_alert(alert: FraudAlert) -> None:
+        broker.publish(alert.to_dict())
+
+    # One processor, one consumer group, one owner. Two consumers in a group
+    # would each score every payment and land duplicate alerts; the lock makes
+    # the background loop and POST /stream take turns on the same consumer.
+    fraud_processor: FraudStreamProcessor | None = None
+    if bus is not None and warehouse is not None:
+        fraud_processor = FraudStreamProcessor(
+            consumer=bus.consumer(
+                "payments", settings.fraud_consumer_group, auto_offset_reset="earliest"
+            ),
+            scorer=FraudScorer(settings, metrics),
+            metrics=metrics,
+            output_producer=bus,
+            alert_topic="fraud_alerts",
+            suppression_check=erasure.is_suppressed,
+            on_alert=publish_alert,
+        )
+    fraud_lock = threading.Lock()
+    # Filled in by the lifespan; /stats reports liveness from the threads
+    # themselves rather than from what the configuration says should happen.
+    workers: dict[str, threading.Thread | None] = {"erasure": None, "fraud": None}
     # Retry safety for the one endpoint that deletes data (see idempotency.py).
     idempotency = IdempotencyStore()
     # Per-client pacing for the routes that change state (see ratelimit.py).
@@ -304,6 +328,26 @@ def create_app(
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         stop = threading.Event()
         worker: threading.Thread | None = None
+        fraud_worker: threading.Thread | None = None
+
+        def fraud_loop() -> None:
+            """Drain the payments topic until shutdown.
+
+            `run()` returns after a short idle stretch, which is the loop's
+            natural tick: ingest what arrived, then wait to be woken. Alerts
+            are ingested while the fraud lock is held so a `POST /stream`
+            cannot interleave two alert sets into bronze.
+            """
+            assert fraud_processor is not None and warehouse is not None
+            while not stop.is_set():
+                with fraud_lock:
+                    alerts = fraud_processor.run(poll_timeout=0.2, idle_stop=5)
+                    if alerts:
+                        warehouse.ingest_fraud_alerts([a.to_dict() for a in alerts])
+                if alerts:
+                    metrics.flush()
+                stop.wait(0.5)
+
         if start_worker and bus is not None:
             worker = threading.Thread(
                 target=erasure.run_worker,
@@ -312,13 +356,36 @@ def create_app(
                 daemon=True,
             )
             worker.start()
+            workers["erasure"] = worker
             logger.info("erasure worker running in background")
+        if (
+            start_worker
+            and settings.fraud_worker_enabled
+            and fraud_processor is not None
+            and warehouse is not None
+        ):
+            fraud_worker = threading.Thread(
+                target=fraud_loop,
+                name="eurostream-fraud-worker",
+                daemon=True,
+            )
+            fraud_worker.start()
+            workers["fraud"] = fraud_worker
+            logger.info(
+                "fraud scoring worker running in background (group=%s)",
+                settings.fraud_consumer_group,
+            )
         try:
             yield
         finally:
             stop.set()
+            if fraud_processor is not None:
+                # Unblocks a poll mid-drain; the processor is not reused.
+                fraud_processor.stop()
             if worker is not None:
                 worker.join(timeout=5)
+            if fraud_worker is not None:
+                fraud_worker.join(timeout=5)
             metrics.flush()
             logger.info("shutdown complete: metrics flushed")
 
@@ -523,6 +590,15 @@ def create_app(
                 "rejected": limiter.rejected,
             },
             "alerts": broker.stats(),
+            "fraud_worker": {
+                "enabled": settings.fraud_worker_enabled,
+                "running": bool(workers["fraud"] and workers["fraud"].is_alive()),
+                "group": settings.fraud_consumer_group,
+                "processor": fraud_processor is not None,
+            },
+            "erasure_worker": {
+                "running": bool(workers["erasure"] and workers["erasure"].is_alive()),
+            },
         }
         if warehouse is not None:
             try:
@@ -949,23 +1025,11 @@ def create_app(
         """Consumes payments and runs real-time FraudScorer."""
         if bus is None or warehouse is None:
             return service_unavailable("event bus or warehouse is not wired into this server")
-        scorer = FraudScorer(settings, metrics)
-
-        def publish_alert(alert: FraudAlert) -> None:
-            # Fan out to anyone watching GET /stream/alerts while we score.
-            broker.publish(alert.to_dict())
-
-        processor = FraudStreamProcessor(
-            consumer=bus.consumer("payments", "api-fraud-stream", auto_offset_reset="earliest"),
-            scorer=scorer,
-            metrics=metrics,
-            output_producer=bus,
-            alert_topic="fraud_alerts",
-            suppression_check=erasure.is_suppressed,
-            on_alert=publish_alert,
-        )
-        alerts = processor.run(max_events=max_events)
-        warehouse.ingest_fraud_alerts([a.to_dict() for a in alerts])
+        if fraud_processor is None:
+            return service_unavailable("event bus or warehouse is not wired into this server")
+        with fraud_lock:
+            alerts = fraud_processor.run(max_events=max_events)
+            warehouse.ingest_fraud_alerts([a.to_dict() for a in alerts])
         metrics.flush()
         return {
             "status": "ok",
