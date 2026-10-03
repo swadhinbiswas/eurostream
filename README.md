@@ -2,7 +2,7 @@
 
 # EuroStream
 
-A Python reference implementation for streaming fraud detection, medallion analytics, and GDPR erasure workflows in European commerce.
+**A GDPR-native streaming + medallion lakehouse platform: real-time fraud scoring on one path, a verifiable Article&nbsp;17 erasure cascade on the other.**
 
 [![CI Pipeline](https://github.com/swadhinbiswas/eurostream/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/swadhinbiswas/eurostream/actions/workflows/ci.yml)
 [![Orchestration DAG](https://github.com/swadhinbiswas/eurostream/actions/workflows/orchestrate.yml/badge.svg?branch=master)](https://github.com/swadhinbiswas/eurostream/actions/workflows/orchestrate.yml)
@@ -12,9 +12,43 @@ A Python reference implementation for streaming fraud detection, medallion analy
 [![Ruff](https://img.shields.io/badge/linter-ruff-black?style=flat-square)](https://github.com/astral-sh/ruff)
 [![License: MIT](https://img.shields.io/badge/license-MIT-black?style=flat-square)](LICENSE)
 
-[Docs site source](site/README.md) · [Public Parquet lake](https://huggingface.co/datasets/swadhinbiswas/eustream) · [JOSS research paper](paper/paper.md) · [Architecture RFC](docs/rfc/0001-platform-design.md)
+[▶ Design walkthrough](#design-walkthrough) · [Docs site source](site/README.md) · [Public Parquet lake](https://huggingface.co/datasets/swadhinbiswas/eustream) · [Research paper](paper/paper.md) · [Architecture RFC](docs/rfc/0001-platform-design.md)
 
 </div>
+
+## Design walkthrough
+
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=9rdsebwqCPk">
+    <img src="https://i.ytimg.com/vi/9rdsebwqCPk/hqdefault.jpg" alt="Design walkthrough: a full GDPR-native data pipeline with real-time fraud protection — click to watch on YouTube" width="720"/>
+  </a>
+</p>
+
+**[Design a full GDPR-native data pipeline with real-time fraud protection](https://www.youtube.com/watch?v=9rdsebwqCPk)** — the architecture behind the erasure cascade, the medallion layers, and the streaming fraud rules, explained end to end.
+
+## Highlights
+
+| | |
+|---|---|
+| **Erasure you can prove** | A layered Article 17 cascade — suppression registry → Bronze anonymization → Silver/Gold delete → Parquet lake re-snapshot — ending in a tamper-evident audit row and a `GET /verify-erasure/{id}` spot check. |
+| **Fast where it counts** | 50 cascades run at a p95 of **27 ms** against an application SLA of 60 s ([benchmark](#erasure-latency-benchmark)). |
+| **Concurrency-safe** | DuckDB access is serialised behind an `RLock` with per-call cursors; concurrent `/quality-gate` requests are regression-tested to return byte-identical reports with no cross-request rows. |
+| **An API that fails honestly** | RFC 9457 `problem+json` bodies, `202 Accepted` for queued erasures, `503` when a backend is missing, bound SQL parameters everywhere (an injection attempt is a `422`), optional bearer auth on every mutating route. |
+| **Operable** | Prometheus exposition at `/metrics/prometheus`, JSON snapshot at `/metrics`, `/health` that reports `degraded: true` when a backend silently fell back, and a scheduled GitHub Actions DAG. |
+| **Tested and typed** | `mypy --strict`, `ruff` lint + format, 90 pytest tests, an event-contract drift check, a Docker smoke test that runs the whole demo in a container, and a docs build — all in CI. |
+
+### Tech stack
+
+| Concern | Choice |
+|---|---|
+| API and UI | FastAPI + Uvicorn; dashboard in Alpine.js served from the API (no build step) |
+| Warehouse | DuckDB (embedded) with Bronze/Silver/Gold schemas; Parquet lake export |
+| Streaming | SQLite WAL event bus locally; Kafka with SASL_SSL/SCRAM-SHA-256 when hosted |
+| Governance | Salted SHA-256 pseudonymization, suppression registry, append-only JSONL audit |
+| Optional services | Turso libSQL replication, Hugging Face dataset publication |
+| Tooling | `uv`, `ruff`, `mypy --strict`, `pytest`, Docker, GitHub Actions (pinned actions) |
+| Docs site | Astro + Starlight under [`site/`](site/README.md) |
+| Second stack | Databricks: Lakeflow Declarative Pipelines, Unity Catalog, AppKit app |
 
 ## Why erasure needs an architecture
 
@@ -69,7 +103,7 @@ uv run eurostream stream --max-events 500
 # 3. Execute Medallion DAG (Bronze -> Silver -> Gold -> Quality Gates -> Lake Export)
 uv run eurostream transform --incremental
 
-# 4. Probe & sync local warehouse state to Turso cloud database
+# 4. Probe & sync local warehouse state to Turso (needs TURSO_DATABASE_URL + TURSO_AUTH_TOKEN)
 uv run eurostream probe-turso
 uv run eurostream sync-turso
 
@@ -97,6 +131,20 @@ Open [http://localhost:7860/](http://localhost:7860/) for the demo dashboard:
 Each tab fetches its own data from the API, and a failed request is written to the dashboard banner with the problem+json `detail` instead of being dropped.
 
 The API runs the erasure worker inside the application lifespan, so `POST /erasure-requests` returns `202 Accepted` and the cascade executes in the background. Send `{"customer_id": "...", "sync": true}` for a blocking `200 OK` with the proof payload. Set `EUROSTREAM_API_TOKEN` to require a bearer token on every mutating endpoint; without it the demo API stays open on purpose.
+
+## Repository tour
+
+| Path | What lives there |
+|---|---|
+| `src/eurostream/` | The platform: event bus, streaming scorer, DuckDB warehouse, quality gate, governance (PII + erasure), FastAPI service, Typer CLI, dashboard |
+| `tests/` | 90 tests — unit, HTTP contract, concurrency isolation, suppression-resurrection and data-quality regressions |
+| `benchmarks/` | Erasure latency benchmark against the 60-second application target |
+| `governance/` | Committed schema-contract baseline and PII manifest |
+| `docs/` | Architecture, erasure flow, ADRs, design RFC, postmortems |
+| `site/` | Astro + Starlight engineering cookbook (23 pages, built in CI) |
+| `databricks/` | Independent second implementation: Lakeflow pipelines, Unity Catalog governance, AppKit app |
+| `infra/` | Terraform for the AWS eu-central-1 reference deployment |
+| `.github/workflows/` | CI (lint, types, tests, contracts, container smoke test, docs) plus the four-hour orchestration DAG |
 
 ## System architecture
 
@@ -164,7 +212,7 @@ Container restarts can clear in-memory state and local files. [DuckDB](https://d
 
 #### Schema and PII checks
 
-The contract command compares event models with the committed baseline and blocks breaking contract drift. It does not classify every column in every Bronze table. A separate transform check samples rows for PII and validates configured European IBAN country and length combinations with the Mod-97 checksum.
+The contract command compares event models with the committed baseline and blocks breaking contract drift. It does not classify every column in every Bronze table. A separate quality gate scans every row of the configured Silver PII columns, and the PII classifier validates configured European IBAN country and length combinations with the Mod-97 checksum.
 
 The gate is implemented in [`eurostream contracts --baseline governance/contracts.json`](src/eurostream/contracts.py).
 
@@ -185,7 +233,7 @@ The following diagram describes the intended sequence. The current implementatio
    └──▶ Cryptographic Audit Log Generation: sha256(request_id : customer_id)[0:16]
 ```
 
-The API defaults to queueing an erasure request. The queue contains a tombstone and requires a separately started worker. Synchronous execution is available for local workflows.
+The API queues the request as a tombstone and executes it on the background worker started with the app; `sync: true` runs the same cascade inline when you want the proof immediately.
 
 ### Local verification
 
@@ -279,7 +327,7 @@ eurostream_erasure_latency_sum 687.78
 eurostream_erasure_latency_count 1
 ```
 
-Every series carries `# HELP` and `# TYPE`, counters are namespaced `eurostream_*` and suffixed `_total`, the block ends with a newline, and `eurostream_up` is emitted even before the first request so a scrape never returns an empty registry. Beyond HTTP traffic the registry counts erasure requests, failures, SLA breaches, per-rule fraud alerts (`fraud_alert_velocity`, `fraud_alert_amount_zscore`, `fraud_alert_geo_mismatch`), suppressed events, and erasure latency. Snapshots are also appended to `data/logs/metrics.jsonl`.
+Every series carries `# HELP` and `# TYPE`, counters are namespaced `eurostream_*` and suffixed `_total`, the block ends with a newline, and `eurostream_up` is emitted even before the first request so a scrape never returns an empty registry. Beyond HTTP traffic the registry counts erasure requests, failures, SLA breaches, per-rule fraud alerts (`eurostream_fraud_alert_velocity_total`, `eurostream_fraud_alert_amount_zscore_total`, `eurostream_fraud_alert_geo_mismatch_total`), suppressed events, and erasure latency. Snapshots are also appended to `data/logs/metrics.jsonl`.
 
 ## Erasure latency benchmark
 
@@ -294,10 +342,10 @@ uv run python benchmarks/benchmark_erasure.py
        EUROSTREAM GDPR ART. 17 BENCHMARK RESULTS     
 =======================================================
  Iterations Tested : 50
- Mean Latency      : 66.95 ms
- Median (p50)      : 61.84 ms
- p95 Latency       : 109.20 ms
- Min / Max Latency : 58.85 ms / 110.07 ms
+ Mean Latency      : 23.91 ms
+ Median (p50)      : 23.35 ms
+ p95 Latency       : 26.62 ms
+ Min / Max Latency : 22.40 ms / 29.10 ms
  Statutory SLA     : 60,000 ms (Passed: 100%)
 =======================================================
 ```

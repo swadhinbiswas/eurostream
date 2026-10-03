@@ -50,10 +50,10 @@ layer.
 | Warehouse | `src/eurostream/warehouse.py` | DuckDB medallion: Bronze → Silver → Gold, plus governance schema |
 | PII governance | `src/eurostream/governance/pii.py` | Pure-Python classifier with ISO 13616 mod-97 IBAN validation |
 | Erasure | `src/eurostream/governance/erasure.py` | GDPR Art. 17 cascade: tombstone → suppress → anonymize → delete → audit |
-| Data quality | `src/eurostream/quality.py` | Gate engine: uniqueness, referential integrity, PII-not-clear, consent gating |
+| Data quality | `src/eurostream/quality.py` | Gate engine: uniqueness, referential integrity, full-column PII-not-clear, NULL-safe consent gating, suppression enforcement |
 | Orchestration | `src/eurostream/orchestration.py` | Python DAG executor with task dependencies and timing (Airflow-shaped, zero scheduler) |
 | API | `src/eurostream/api.py` | FastAPI: erasure endpoint, health, metrics, governance queries |
-| Metrics | `src/eurostream/metrics.py` | Prometheus-shaped counters and histograms written to JSONL |
+| Metrics | `src/eurostream/metrics.py` | Counters/gauges/summaries behind a Prometheus text endpoint (`/metrics/prometheus`) and JSONL snapshots |
 | CLI | `src/eurostream/cli.py` | Typer CLI: `demo`, `produce`, `stream`, `transform`, `erase`, `contracts` |
 
 ## Medallion layers
@@ -99,8 +99,12 @@ Tables: `gold.customer_360`, `gold.order_facts`, `gold.fraud_summary`
 Audit and metadata tables:
 
 - `governance.erasure_audit_log`: tamper-evident records of every erasure execution
+- `governance.suppression_registry`: durable tombstones; every medallion build anti-joins against it so erased customers cannot resurrect
 - `governance.pii_manifest`: machine-readable column-level PII classification
 - `governance.data_quality_runs`: history of quality gate results
+- `governance.watermarks`: incremental Silver/Gold high-water marks
+- `governance.lineage_events`: task-level lineage emitted by the DAG executor
+- `erasure_requests_dlq` (bus topic): poison messages dead-lettered instead of stalling the worker
 
 ## Speed path vs. batch path
 

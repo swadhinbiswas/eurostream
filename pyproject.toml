@@ -14,6 +14,11 @@ dependencies = [
     "typer>=0.12",
     "httpx>=0.27",
     "huggingface-hub>=0.23",
+    # Kafka client wheels exist for the regular CPython builds through 3.14,
+    # but not for the free-threaded (PEP 703) interpreter and no environment
+    # marker can single those out, so the conservative pin stays. Nothing
+    # needs it locally: the default bus is SQLite, and requesting kafka
+    # without the package logs a warning and falls back instead of crashing.
     "confluent-kafka>=2.4; python_version < '3.13'",
 ]
 classifiers = [

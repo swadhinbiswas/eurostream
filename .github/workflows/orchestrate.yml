@@ -34,17 +34,23 @@ jobs:
         run: |
           uv run python -c "
           import os
-          from confluent_kafka.admin import AdminClient, NewTopic
-          raw=os.environ.get('KAFKA_BOOTSTRAP','').strip()
-          if '://' in raw: raw=raw.split('://',1)[1]
-          if '@' in raw: raw=raw.split('@',1)[1]
-          raw=raw.split('/',1)[0].strip()
-          conf={'bootstrap.servers': raw,'security.protocol':'SASL_SSL','sasl.mechanism':'SCRAM-SHA-256','sasl.username':os.environ['KAFKA_USER'],'sasl.password':os.environ['KAFKA_PASS'],'socket.timeout.ms':8000}
-          try:
-            admin=AdminClient(conf); admin.list_topics(timeout=8)
-            print('kafka ok'); open(os.environ['GITHUB_OUTPUT'],'a').write('backend=kafka\n')
-          except Exception as e:
-            print(f'fallback sqlite: {e}'); open(os.environ['GITHUB_OUTPUT'],'a').write('backend=sqlite\n')
+          def emit(v): open(os.environ['GITHUB_OUTPUT'],'a').write('backend='+v+'\n')
+          raw=(os.environ.get('KAFKA_BOOTSTRAP') or '').strip()
+          user=os.environ.get('KAFKA_USER') or ''
+          pw=os.environ.get('KAFKA_PASS') or ''
+          if not raw or not user or not pw:
+            print('kafka credentials not configured; using sqlite'); emit('sqlite')
+          else:
+            if '://' in raw: raw=raw.split('://',1)[1]
+            if '@' in raw: raw=raw.split('@',1)[1]
+            raw=raw.split('/',1)[0].strip()
+            conf={'bootstrap.servers': raw,'security.protocol':'SASL_SSL','sasl.mechanism':'SCRAM-SHA-256','sasl.username':user,'sasl.password':pw,'socket.timeout.ms':8000}
+            try:
+              from confluent_kafka.admin import AdminClient
+              admin=AdminClient(conf); admin.list_topics(timeout=8)
+              print('kafka ok'); emit('kafka')
+            except Exception as e:
+              print('fallback sqlite:', e); emit('sqlite')
           "
         env:
           KAFKA_BOOTSTRAP: ${{ secrets.KAFKA_BOOTSTRAP_SERVERS }}
