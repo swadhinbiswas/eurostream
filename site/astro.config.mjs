@@ -155,6 +155,7 @@ export default defineConfig({
           items: [
             "reference/configuration",
             "reference/api-reference",
+            "reference/operations-cli",
             "reference/deploy-cloudflare-pages",
             "reference/deploy-docker-cloud",
           ],

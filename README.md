@@ -117,6 +117,9 @@ uv run eurostream contracts --baseline governance/contracts.json
 ### Start the web UI and API
 
 ```bash
+make serve          # eurostream serve — 127.0.0.1:7860, the same app the container runs
+
+# or with hot reload while editing:
 uv run uvicorn eurostream.api:app --reload --port 7860
 ```
 
@@ -132,19 +135,35 @@ Each tab fetches its own data from the API, and a failed request is written to t
 
 The API runs the erasure worker inside the application lifespan, so `POST /erasure-requests` returns `202 Accepted` and the cascade executes in the background. Send `{"customer_id": "...", "sync": true}` for a blocking `200 OK` with the proof payload. Set `EUROSTREAM_API_TOKEN` to require a bearer token on every mutating endpoint; without it the demo API stays open on purpose.
 
+### Operate it
+
+The commands below are the ones an on-call rotation uses; the [operations CLI reference](https://eurostream-docs.pages.dev/reference/operations-cli/) documents every flag.
+
+```bash
+uv run eurostream verify-audit            # hash chain intact? exit 0/1/2
+uv run eurostream dlq list --check        # unhandled dead letters? exit 1 if any
+uv run eurostream backup                  # checksummed warehouse + audit snapshot
+uv run eurostream restore data/backups/…  # verified before it overwrites anything
+uv run eurostream replay --dry-run        # rebuild the warehouse from the event log
+uv run eurostream chaos                   # six drills; exit 1 means a guardrail failed
+uv run eurostream load-test               # p50/p95/p99 against a server it starts itself
+make observe                              # api + Prometheus + Grafana
+```
+
 ## Repository tour
 
 | Path | What lives there |
 |---|---|
 | `src/eurostream/` | The platform: event bus, streaming scorer, DuckDB warehouse, quality gate, governance (PII + erasure), FastAPI service, Typer CLI, dashboard |
-| `tests/` | 90 tests — unit, HTTP contract, concurrency isolation, suppression-resurrection and data-quality regressions |
+| `tests/` | 265 tests — unit, HTTP contract, concurrency isolation, suppression-resurrection, data-quality regressions, and an anti-drift suite that checks every alert and dashboard panel names a metric the source actually emits |
 | `benchmarks/` | Erasure latency benchmark against the 60-second application target |
 | `governance/` | Committed schema-contract baseline and PII manifest |
+| `observability/` | Prometheus scrape config, eleven alert rules, and a provisioned Grafana dashboard behind `--profile observe` |
 | `docs/` | Architecture, erasure flow, ADRs, design RFC, postmortems |
 | `site/` | Astro + Starlight engineering cookbook (23 pages, built in CI) |
 | `databricks/` | Independent second implementation: Lakeflow pipelines, Unity Catalog governance, AppKit app |
 | `infra/` | Terraform for the AWS eu-central-1 reference deployment |
-| `.github/workflows/` | CI (lint, types, tests, contracts, container smoke test, docs) plus the four-hour orchestration DAG |
+| `.github/workflows/` | CI (lint, types, tests, contracts, container smoke test, docs), the four-hour orchestration DAG, and the tag-gated release pipeline |
 
 ## System architecture
 
@@ -329,6 +348,17 @@ eurostream_erasure_latency_count 1
 
 Every series carries `# HELP` and `# TYPE`, counters are namespaced `eurostream_*` and suffixed `_total`, the block ends with a newline, and `eurostream_up` is emitted even before the first request so a scrape never returns an empty registry. Beyond HTTP traffic the registry counts erasure requests, failures, SLA breaches, per-rule fraud alerts (`eurostream_fraud_alert_velocity_total`, `eurostream_fraud_alert_amount_zscore_total`, `eurostream_fraud_alert_geo_mismatch_total`), suppressed events, and erasure latency. Snapshots are also appended to `data/logs/metrics.jsonl`.
 
+### The stack that scrapes it
+
+```bash
+make observe      # docker compose --profile observe up -d
+make observe-down
+```
+
+Prometheus and Grafana sit behind `--profile observe`, so `docker compose up` is still one container; `make observe` brings up the API, Prometheus and Grafana together (host ports are overridable with `PROMETHEUS_PORT` and `GRAFANA_PORT`). Prometheus scrapes `/metrics/prometheus` every 10s — faster than the rolling 300s SLO window, because a budget read slower than its own window is stale before anyone looks at it. Grafana is provisioned from files, not imported by hand: a twelve-panel dashboard (error budget, burn rate, traffic by status, mean request time, erasure pipeline, queue depth, latency against the SLA, shedding, the live feed, what is firing) and eleven alerts across availability, erasure, ingest and the live feed, each with a severity and a runbook line.
+
+Everything an alert or a panel names is checked by `tests/test_observability.py`, which parses `rules.yml` and the dashboard JSON, extracts each `eurostream_*` identifier and compares it with the metric table, and scans the source for emitted metric literals against that table's help text. That test is the reason `build_info`, `erasure_completed` and `erasure_queue_depth` are emitted today: all three were declared and never written. Latency is plotted as a mean over the summary's `_sum`/`_count` and titled as one — the summary has no buckets, so a quantile there would be invented rather than measured. Details in [`observability/README.md`](observability/README.md) and [ADR 0007](docs/adr/0007-observability.md).
+
 ## Erasure latency benchmark
 
 The benchmark constructs a local DuckDB warehouse and measures direct warehouse execution against the application's 60-second target.
@@ -387,8 +417,15 @@ The gate runs:
 1. Ruff lint: `uv run ruff check src tests`.
 2. Ruff formatting: `uv run ruff format --check src tests`.
 3. Strict mypy for `src/eurostream`: `uv run mypy src/eurostream`, with missing third-party imports ignored by the project configuration.
-4. Pytest: `uv run pytest -q`, with 90 tests covering the local runtime, the HTTP contract, concurrency and suppression regressions, and the static Databricks notebook and query contracts.
+4. Pytest: `uv run pytest -q`, with 265 tests covering the local runtime, the HTTP contract, concurrency and suppression regressions, data quality, the CLI and the static Databricks notebook and query contracts.
 5. Event contract drift: `uv run eurostream contracts --baseline governance/contracts.json`.
+
+Coverage has a floor: any run that measures it — CI, `make coverage`, a hand-rolled `pytest --cov` — fails below **80%** (the suite sits at ~83%), and `show_missing` prints what is not covered. The floor is deliberately under the current number so a refactor that shuffles code does not fail CI, and deliberately above zero so deleting tests does.
+
+Two more things run before CI ever sees a commit:
+
+- **Pre-commit hooks** — `make hooks` installs them. Hygiene checks (JSON/TOML/YAML validity, private keys, merge-conflict markers, trailing whitespace, final newline) plus `ruff --fix` and `ruff format` on commit; mypy strict and the contract baseline on push. They are the gate's own tools invoked through `uv run`, so there is no second toolchain to drift, and `uvx pre-commit run --all-files` runs the whole set on demand.
+- **Releases** — a published GitHub Release runs this same gate, builds with `uv build`, checks the artifacts with `twine check --strict`, requires the tag, the wheel metadata and `eurostream.__version__` to be the same number, requires `CHANGELOG.md` to have a dated section for the version, and publishes to PyPI by OIDC trusted publishing. See [CONTRIBUTING.md](CONTRIBUTING.md#releasing).
 
 The Python gate does not run the separate TypeScript checks for the Databricks application.
 

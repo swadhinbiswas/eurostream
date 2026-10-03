@@ -1,0 +1,188 @@
+---
+title: "Operations CLI — Backup, Replay, DLQ, Chaos and Load Testing"
+description: "Reference for the EuroStream operations commands — eurostream serve, backup, restore, replay, dlq, verify-audit, chaos and load-test, plus the Make targets and the observability stack that go with them."
+sidebar:
+  order: 3
+---
+
+The pipeline commands (`produce`, `stream`, `transform`, `erase`, `demo`)
+move data. The commands on this page are for the person who has to run the
+thing: start it, keep a copy of it, take it apart after an incident, and
+prove it still behaves.
+
+```bash
+uv run eurostream --version
+# eurostream 0.3.0
+```
+
+## `eurostream serve`
+
+The server's front door — validates its own arguments instead of passing
+whatever uvicorn would tolerate:
+
+```bash
+uv run eurostream serve --port 7860
+make serve          # the same thing
+```
+
+- `--port` must be 1–65535.
+- `--reload` with `--workers` greater than 1 is refused (reload re-executes
+  the process; a multi-worker reload is a race), and reload drops the worker
+  count on its own.
+- The app is passed as the import string `eurostream.api:app`, so what you
+  develop is exactly what the container runs.
+
+## `eurostream backup` / `restore`
+
+A snapshot is a directory containing the warehouse, its WAL if non-empty,
+the erasure audit log, and a `manifest.json` with the sha256 and byte count
+of every file, per-table row counts, and the audit chain's sequence and tip.
+
+```bash
+uv run eurostream backup                    # data/backups/<timestamp>
+uv run eurostream backup -o /mnt/backup --label pre-migration
+uv run eurostream restore data/backups/2026-10-03T12-00-00
+```
+
+The restore is the part worth reading about:
+
+- checksums are verified **before** the first byte is written over live
+  data — restoring a corrupt backup destroys the good copy it replaces;
+- it refuses to overwrite an existing warehouse or audit log without
+  `--force`;
+- targets come from this deployment's settings, never from the manifest, so
+  a hand-edited manifest cannot redirect a restore somewhere else;
+- afterwards it re-verifies: row counts against the manifest, then the audit
+  chain and its agreement with the warehouse copy.
+
+The lake and the metric log are deliberately not in the snapshot — both are
+rebuildable with `eurostream replay`, and backing up what you can regenerate
+is how backups get too big to take.
+
+## `eurostream replay`
+
+Rebuild the warehouse from the event log — the answer to "the table is
+wrong and the source of truth is still in the bus":
+
+```bash
+uv run eurostream replay --dry-run           # what the log holds
+uv run eurostream replay --limit 50000
+uv run eurostream replay --lake              # re-export the Parquet lake too
+```
+
+Each topic gets a throwaway consumer group, so replaying does not disturb
+the live workers' positions; records are inserted with `INSERT OR IGNORE`
+on `event_id`, so a half-finished replay can be resumed by running it again.
+Customers in the suppression registry are skipped — an erased customer must
+not be re-ingested by the tool that exists to restore everyone else.
+
+## `eurostream dlq`
+
+Dead-lettered erasure requests — records the worker could not parse or
+execute — are moved aside rather than dropped:
+
+```bash
+uv run eurostream dlq list --check           # exit 1 while any are unhandled
+uv run eurostream dlq requeue --dry-run      # show what would be republished
+uv run eurostream dlq requeue
+uv run eurostream dlq ack                    # handled, do not retry
+```
+
+Records are never deleted: `list` reads without committing the cursor, and
+`requeue` publishes back onto the intake topic (carrying `requeued_from` and
+`dlq_offset` headers) **before** it commits, so a crash mid-operation can
+duplicate a message but can never lose one. `ack` only moves the cursor.
+
+## `eurostream verify-audit`
+
+The erasure audit log is hash-chained, and the chain is only worth having
+if something checks it:
+
+```bash
+uv run eurostream verify-audit
+uv run eurostream verify-audit --strict --json
+```
+
+| Exit code | Meaning |
+|---|---|
+| `0` | intact — every record links to the one before it |
+| `1` | tampered, or the file and `governance.erasure_audit_log` disagree |
+| `2` | not runnable (no log, unreadable) — an environment problem, not tampering |
+
+`--strict` also fails on records that predate the chain and on duplicates,
+which is how a future clean log gets held to a higher bar than the past one.
+
+## `eurostream chaos`
+
+Six drills that break the platform on purpose and check that a guardrail
+caught it. Each runs in its own throwaway sandbox directory under a fresh
+tempdir — `Settings` is constructed with overrides, so no deployment path is
+ever touched:
+
+```bash
+uv run eurostream chaos --list
+uv run eurostream chaos                       # all six
+uv run eurostream chaos -s audit-tamper --keep
+```
+
+| Drill | What breaks | What must happen |
+|---|---|---|
+| `retry-recovers` | a dependency fails twice, then recovers | the write succeeds |
+| `breaker-refuses` | a dependency is dead | the breaker opens and stops trying |
+| `freshness-gate` | an ingest stalls | the freshness gate fails the stale layer |
+| `volume-gate` | a transform wipes a table | the volume gate notices |
+| `audit-tamper` | an audit record is edited | the hash chain refuses it |
+| `poison-message` | an unparseable erasure request | it dead-letters; the worker survives |
+
+**Its exit code is inverted on purpose: `1` means a guardrail did not hold.**
+A drill suite where zero means "everything broke" invites running it and not
+reading it. `--json` gives a machine-readable report.
+
+## `eurostream load-test`
+
+Latency you measured rather than latency you asserted:
+
+```bash
+uv run eurostream load-test                   # starts the app in-process
+make load
+uv run eurostream load-test -u http://localhost:7860 -n 500 -c 32 --path /health
+```
+
+Leave `--url` out and it starts the API on a free port, measures it, and
+shuts it down — one command from a cold checkout to a p95. Percentiles are
+nearest-rank over per-endpoint samples (p50/p95/p99/max, plus throughput and
+an overall p95).
+
+The verdict rule matters: **5xx, timeouts and transport failures fail the
+run; 429s never do.** A rate-limited request means the token bucket is
+working. Failing the run on it would pressure someone into disabling the
+protection.
+
+## Observability stack
+
+```bash
+make observe        # api + Prometheus + Grafana
+make observe-down
+```
+
+Prometheus and Grafana sit behind `docker compose --profile observe`, so a
+plain `docker compose up` is still just the API. The stack ships eleven
+alert rules across four groups (availability, GDPR erasure, ingest, live
+feed) and a provisioned twelve-panel dashboard — every metric they name is
+checked against what the source actually emits by `tests/test_observability.py`,
+which is how declared-but-never-emitted metrics get caught before a dashboard
+is built on top of them. See
+[`observability/README.md`](https://github.com/swadhinbiswas/eurostream/blob/master/observability/README.md)
+for the panels, alerts and query conventions.
+
+## Make targets
+
+| Target | Does |
+|---|---|
+| `make gate` | lint, format, strict types, tests, contract baseline — what CI runs |
+| `make hooks` | install the pre-commit hooks (ruff + hygiene on commit, mypy + contracts on push) |
+| `make serve` | run the API on `127.0.0.1:7860` |
+| `make load` | fire HTTP load at an in-process server, report percentiles |
+| `make observe` / `make observe-down` | start / stop api + Prometheus + Grafana |
+| `make demo` | the end-to-end pipeline demo |
+| `make coverage` | tests with a line-coverage report against the 80% floor |
