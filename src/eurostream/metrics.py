@@ -32,6 +32,9 @@ _HELP = {
     "erasure_latency": "End-to-end latency of a right-to-erasure request.",
     "erasure_queue_depth": "Erasure requests waiting to be executed.",
     "malformed_erasure_requests": "Erasure records dropped as unparseable.",
+    "rate_limited_requests": "Mutating requests rejected by the per-client rate limiter.",
+    "idempotent_replays": "Erasure POSTs answered from the idempotency cache.",
+    "idempotency_conflicts": "Erasure POSTs rejected for reusing a key on another customer.",
     "http_success_ratio": "Share of requests in the rolling window that were not 5xx.",
     "http_error_budget_burn_rate": (
         "Observed 5xx rate divided by the rate the SLO allows; "

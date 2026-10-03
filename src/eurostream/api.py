@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import random
 import re
 import threading
@@ -34,6 +35,7 @@ from eurostream.models import ErasureRequested
 from eurostream.orchestration import DAG, DAGTask
 from eurostream.producers import ClickProducer, OrderProducer, PaymentProducer
 from eurostream.quality import DataQualityEngine
+from eurostream.ratelimit import RateLimiter
 from eurostream.streaming import FraudScorer, FraudStreamProcessor
 from eurostream.warehouse import Warehouse
 
@@ -281,6 +283,8 @@ def create_app(
     requested_backend = settings.event_bus_backend
     # Retry safety for the one endpoint that deletes data (see idempotency.py).
     idempotency = IdempotencyStore()
+    # Per-client pacing for the routes that change state (see ratelimit.py).
+    limiter = RateLimiter(settings.api_rate_limit, settings.api_rate_limit_burst)
     # Format every EuroStream line the way this deployment wants it before the
     # first log fires (lifespan, worker, request handlers).
     configure_logging(settings.log_level, settings.log_format)
@@ -422,6 +426,29 @@ def create_app(
             f"unexpected failure (request id {rid})",
         )
 
+    def rate_limit(request: Request) -> None:
+        """Per-client token bucket on mutating routes; 429 problem+json.
+
+        The key is the first hop of X-Forwarded-For when present (the
+        platform runs behind a proxy in every deployment that matters) and
+        the socket address otherwise.
+        """
+        if not limiter.enabled:
+            return
+        client = request.client.host if request.client else "unknown"
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            client = forwarded.split(",")[0].strip() or client
+        allowed, retry_after = limiter.check(client)
+        if not allowed:
+            metrics.incr("rate_limited_requests")
+            retry = max(1, int(math.ceil(retry_after)))
+            raise HTTPException(
+                status_code=429,
+                detail=f"rate limit exceeded for {client}; retry in {retry}s",
+                headers={"Retry-After": str(retry)},
+            )
+
     def require_token(request: Request) -> None:
         if not api_token:
             return
@@ -481,6 +508,12 @@ def create_app(
             "source": "duckdb" if warehouse is not None else "none",
             # Rolling SLO: the dashboard's error-budget panel reads this.
             "slo": metrics.slo(),
+            "rate_limit": {
+                "rate_per_second": settings.api_rate_limit,
+                "burst": settings.api_rate_limit_burst,
+                "enabled": limiter.enabled,
+                "rejected": limiter.rejected,
+            },
         }
         if warehouse is not None:
             try:
@@ -562,7 +595,7 @@ def create_app(
         tags=["governance"],
         summary="Accept a GDPR Art. 17 right-to-erasure request",
         status_code=202,
-        dependencies=[Depends(require_token)],
+        dependencies=[Depends(require_token), Depends(rate_limit)],
         responses={
             202: {"description": "Request accepted and queued for execution"},
             200: {"description": "Cascade executed synchronously (sync=true)"},
@@ -743,7 +776,7 @@ def create_app(
         "/erase/{customer_id}",
         tags=["governance"],
         summary="Execute the deletion cascade synchronously",
-        dependencies=[Depends(require_token)],
+        dependencies=[Depends(require_token), Depends(rate_limit)],
         responses={
             401: {"description": "Missing or invalid bearer token"},
             422: {"description": "Invalid customer identifier"},
@@ -844,7 +877,7 @@ def create_app(
         "/produce",
         tags=["pipeline"],
         summary="Emit synthetic EU events to the bus",
-        dependencies=[Depends(require_token)],
+        dependencies=[Depends(require_token), Depends(rate_limit)],
         responses={
             503: {"description": "No event bus is wired into this server"},
         },
@@ -898,7 +931,7 @@ def create_app(
         "/stream",
         tags=["pipeline"],
         summary="Score pending payments for fraud",
-        dependencies=[Depends(require_token)],
+        dependencies=[Depends(require_token), Depends(rate_limit)],
         responses={503: {"description": "Bus or warehouse is not wired into this server"}},
     )
     def trigger_stream(
@@ -929,7 +962,7 @@ def create_app(
         "/transform",
         tags=["pipeline"],
         summary="Run the medallion DAG (bronze -> silver -> gold -> lake)",
-        dependencies=[Depends(require_token)],
+        dependencies=[Depends(require_token), Depends(rate_limit)],
         responses={
             503: {"description": "Bus or warehouse is not wired into this server"},
             500: {"description": "A DAG task failed; the response names the failing task"},
@@ -1042,7 +1075,7 @@ def create_app(
         "/quality-gate",
         tags=["pipeline"],
         summary="Run the data-quality gate and store its run history",
-        dependencies=[Depends(require_token)],
+        dependencies=[Depends(require_token), Depends(rate_limit)],
         responses={503: {"description": "Warehouse is not wired into this server"}},
     )
     def trigger_quality_gate() -> Any:
@@ -1195,7 +1228,7 @@ def create_app(
     @app.post(
         "/sync-turso",
         tags=["warehouse"],
-        dependencies=[Depends(require_token)],
+        dependencies=[Depends(require_token), Depends(rate_limit)],
         status_code=200,
     )
     def sync_turso_endpoint(

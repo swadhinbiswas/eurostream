@@ -126,6 +126,17 @@ class Settings(BaseSettings):
         ),
     )
 
+    api_rate_limit: float = Field(
+        default=10.0,
+        ge=0.0,
+        description="Requests/second per client on mutating routes (0 disables limiting)",
+    )
+    api_rate_limit_burst: int = Field(
+        default=20,
+        ge=1,
+        description="Tokens a client starts with before limiting kicks in",
+    )
+
     log_level: str = Field(
         default="INFO",
         description="Python logging level (DEBUG, INFO, WARNING, ERROR, ...)",
