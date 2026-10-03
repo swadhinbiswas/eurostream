@@ -16,6 +16,7 @@ import typer
 
 from eurostream.bus import Consumer, Record
 from eurostream.bus.sqlite import open_bus
+from eurostream.chaos import SCENARIOS, discard_sandbox, new_sandbox, run_scenarios
 from eurostream.config import Settings, get_settings
 from eurostream.contracts import ContractRegistry
 from eurostream.governance.audit_chain import AuditChain, verify_audit_log
@@ -829,6 +830,70 @@ def replay(
         )
     warehouse.close()
     bus.close()
+
+
+# ------------------------------------------------------------------ chaos
+
+
+@app.command()
+def chaos(
+    scenario: list[str] | None = typer.Option(
+        None, "--scenario", "-s", help="Run only these drills (repeatable); default: all"
+    ),
+    list_only: bool = typer.Option(False, "--list", help="List the drills and exit"),
+    keep: bool = typer.Option(False, "--keep", help="Keep the sandbox directory for inspection"),
+    json_out: bool = typer.Option(False, "--json", help="Machine-readable report"),
+) -> None:
+    """Break things on purpose and report whether a guardrail caught it.
+
+    Every drill runs in its own directory under a fresh tempdir, so the
+    warehouse, audit log and event log this deployment uses are never even
+    opened — safe to run against a production checkout. A drill passes
+    when the guardrail *fires*: the run exits 1 if any protection the
+    platform claims did not hold, which is the opposite of a test suite
+    where green means nothing happened."""
+    if list_only:
+        for name, fn in SCENARIOS.items():
+            typer.echo(f"  {name:<18} {(fn.__doc__ or '').strip()}")
+        return
+
+    unknown = [name for name in (scenario or []) if name not in SCENARIOS]
+    if unknown:
+        typer.secho(f"unknown scenario(s): {', '.join(unknown)}", fg=typer.colors.RED, err=True)
+        typer.echo("known: " + ", ".join(SCENARIOS))
+        raise typer.Exit(2)
+
+    sandbox = new_sandbox()
+    results = run_scenarios(sandbox, scenario or None)
+    held = sum(1 for result in results if result.ok)
+    failed = [result for result in results if not result.ok]
+
+    if json_out:
+        typer.echo(
+            json.dumps(
+                {
+                    "sandbox": str(sandbox),
+                    "kept": keep,
+                    "results": [{"name": r.name, "ok": r.ok, "detail": r.detail} for r in results],
+                    "held": held,
+                    "failed": len(failed),
+                },
+                indent=2,
+            )
+        )
+    else:
+        typer.echo("guardrail drills — each breaks something on purpose, in a sandbox:")
+        for result in results:
+            colour = typer.colors.GREEN if result.ok else typer.colors.RED
+            mark = "✓" if result.ok else "✗"
+            typer.secho(f"  {mark} {result.name:<18} {result.detail}", fg=colour)
+        typer.echo(f"{held}/{len(results)} guardrails held")
+        typer.echo(f"sandbox: {sandbox}{' (kept)' if keep else ' (removed)'}")
+
+    if not keep:
+        discard_sandbox(sandbox)
+    if failed:
+        raise typer.Exit(1)
 
 
 # ------------------------------------------------------------------- dlq
