@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import random
 import time
@@ -13,6 +14,7 @@ from eurostream.bus import Consumer, Record
 from eurostream.bus.sqlite import open_bus
 from eurostream.config import Settings, get_settings
 from eurostream.contracts import ContractRegistry
+from eurostream.governance.audit_chain import AuditChain, verify_audit_log
 from eurostream.governance.erasure import ErasureAudit, ErasureService
 from eurostream.governance.pii import PIIClassifier
 from eurostream.lineage import LineageEmitter
@@ -324,6 +326,89 @@ def erase(customer_id: str) -> None:
         f"erased {customer_id} in {audit.completed_at - audit.requested_at:.2f}s "
         f"layers={audit.layers_touched} confirmation={audit.confirmation_hash}"
     )
+
+
+@app.command("verify-audit")
+def verify_audit(
+    path: Path = typer.Option(
+        None, "--path", "-p", help="audit JSONL to verify (default: EUROSTREAM_AUDIT_LOG_PATH)"
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        "-s",
+        help="also fail on records that predate the hash chain or on duplicate request_ids",
+    ),
+    json_out: bool = typer.Option(False, "--json", help="print the machine-readable report"),
+    no_cross_check: bool = typer.Option(
+        False, "--no-cross-check", help="verify the file alone, without the warehouse copy"
+    ),
+) -> None:
+    """Verify the tamper-evident erasure audit log.
+
+    Recomputes every hash (an edited record fails its own), follows every
+    prev_hash link (a removed or reordered record breaks the one after it),
+    and — unless --no-cross-check — compares the file against
+    governance.erasure_audit_log, which is what catches a truncated tail.
+
+    Exit codes: 0 intact, 1 tampering or divergence found, 2 not runnable."""
+    settings, bus, warehouse, metrics, _ = _fresh()
+    target = path or settings.audit_log_path
+
+    expected: list[dict[str, object]] | None = None
+    db_error: str | None = None
+    if not no_cross_check:
+        try:
+            expected = warehouse.query("SELECT * FROM governance.erasure_audit_log")
+        except Exception as exc:  # noqa: BLE001 - report it, never hide it
+            db_error = f"warehouse audit table unavailable: {exc}"
+
+    result = verify_audit_log(target, expected=expected)
+    errors = list(result.errors)
+    if db_error is not None:
+        errors.append(db_error)
+    if strict:
+        if result.legacy:
+            errors.append(f"{result.legacy} unverifiable record(s) (strict mode)")
+        if result.duplicates:
+            errors.append(
+                "duplicate request_id(s) in strict mode: "
+                + ", ".join(sorted(set(result.duplicates)))
+            )
+
+    payload = result.to_dict()
+    payload["errors"] = errors
+    payload["ok"] = not errors
+    payload["strict"] = strict
+    # What a fresh writer would chain onto next: equals the verifier's tip
+    # when the file is intact, and diverges when it is not.
+    writer = AuditChain(target)
+    payload["chain"] = {"seq": writer.seq, "tip": writer.tip}
+
+    warehouse.close()
+    bus.close()
+
+    if json_out:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+        raise typer.Exit(0 if payload["ok"] else 1)
+
+    scope = "file only" if no_cross_check else "file + warehouse"
+    typer.echo(f"audit log  : {target}")
+    typer.echo(
+        f"records    : {result.entries} "
+        f"({result.hashed} chained, {result.legacy} legacy, scope: {scope})"
+    )
+    typer.echo(f"last seq   : {result.last_seq}")
+    typer.echo(f"tip        : {result.tip or '-'}")
+    for warning in result.warnings:
+        typer.secho(f"warning    : {warning}", fg=typer.colors.YELLOW)
+    if payload["ok"]:
+        typer.secho("OK — the audit chain is intact", fg=typer.colors.GREEN)
+        raise typer.Exit(0)
+    typer.secho(f"BROKEN — {len(errors)} problem(s):", fg=typer.colors.RED, err=True)
+    for problem in errors:
+        typer.secho(f"  - {problem}", fg=typer.colors.RED, err=True)
+    raise typer.Exit(1)
 
 
 @app.command()

@@ -5,11 +5,21 @@ from pathlib import Path
 import pytest
 
 from eurostream.bus.sqlite import open_bus
-from eurostream.config import Settings
+from eurostream.config import Settings, get_settings
 from eurostream.metrics import Metrics
 from eurostream.models import PaymentProcessed
 from eurostream.producers import EventGenerator
 from eurostream.warehouse import Warehouse
+
+
+@pytest.fixture(autouse=True)
+def _isolated_settings_cache():
+    """`get_settings()` is lru_cached for the process; without this, the first
+    test to run fixes every later test's paths (and an env-based CLI test
+    would silently operate on the repository's ./data instead of tmp_path)."""
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 @pytest.fixture
