@@ -3,14 +3,21 @@ from __future__ import annotations
 import hashlib
 import json
 import json as _json
+import os
+import socket
+import subprocess
+import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from uuid import uuid4
 
+import pytest
 from typer.testing import CliRunner
 
 from eurostream.bus.sqlite import open_bus
-from eurostream.cli import DLQ_TOPIC, ERASURE_TOPIC, app
+from eurostream.cli import DLQ_TOPIC, ERASURE_TOPIC, _serve_kwargs, app
 from eurostream.config import get_settings
 from eurostream.governance.erasure import ErasureService
 from eurostream.metrics import Metrics
@@ -628,3 +635,99 @@ def test_cli_replay_warns_when_the_suppression_registry_itself_is_gone(tmp_path,
         == 1
     )
     warehouse.close()
+
+
+# ------------------------------------------------------------------ serve
+
+
+def _all_output(result) -> str:
+    """stdout plus stderr, whichever way this Click version captured them."""
+    parts = [result.output]
+    try:
+        parts.append(result.stderr)
+    except (ValueError, AttributeError):  # pragma: no cover - depends on click version
+        pass
+    return "".join(parts)
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def test_cli_serve_kwargs_pick_a_configuration_uvicorn_can_honour():
+    # Binding every interface is the container default, exercised on purpose.
+    all_interfaces = "0.0.0.0"  # noqa: S104
+    assert _serve_kwargs(all_interfaces, 7860, reload=False, workers=1, log_level=None) == {
+        "app": "eurostream.api:app",
+        "host": all_interfaces,
+        "port": 7860,
+        "workers": 1,
+    }
+    assert _serve_kwargs("127.0.0.1", 8000, reload=True, workers=1, log_level="info") == {
+        "app": "eurostream.api:app",
+        "host": "127.0.0.1",
+        "port": 8000,
+        "reload": True,
+        "log_level": "info",
+    }
+
+    with pytest.raises(ValueError, match="single process"):
+        _serve_kwargs("127.0.0.1", 8000, reload=True, workers=4, log_level=None)
+    with pytest.raises(ValueError, match="port"):
+        _serve_kwargs("127.0.0.1", 0, reload=False, workers=1, log_level=None)
+
+
+def test_cli_serve_refuses_conflicting_flags_before_binding(tmp_path, monkeypatch):
+    _point_cli_at(tmp_path, monkeypatch)
+
+    res = runner.invoke(app, ["serve", "--reload", "--workers", "4"])
+    assert res.exit_code == 2
+    assert "single process" in _all_output(res)
+
+    bad_port = runner.invoke(app, ["serve", "--port", "99999"])
+    assert bad_port.exit_code == 2
+    assert "port must be between 1 and 65535" in _all_output(bad_port)
+
+
+def test_cli_serve_actually_serves_the_api(tmp_path, monkeypatch):
+    """End to end: start the command in a real process and answer a real
+    HTTP request — a runner that only validated flags would prove nothing
+    about uvicorn actually being wired up."""
+    _point_cli_at(tmp_path, monkeypatch)
+    port = _free_port()
+    script = (
+        f"from eurostream.cli import app; app(['serve', '--host', '127.0.0.1', '--port', {port}])"
+    )
+    process = subprocess.Popen(  # noqa: S603 - sys.executable, our own code
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+    )
+    body: dict[str, object] | None = None
+    try:
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            if process.poll() is not None:
+                output = (process.stdout or b"").read().decode(errors="replace")
+                raise AssertionError(f"server exited {process.returncode} early:\n{output}")
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/health", timeout=2
+                ) as response:
+                    body = json.loads(response.read())
+                break
+            except (urllib.error.URLError, TimeoutError, ConnectionError):
+                time.sleep(0.25)
+        assert body is not None, "server never answered /health"
+        assert body["status"] == "ok"
+        assert body["version"]
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:  # pragma: no cover - only if uvicorn hangs
+            process.kill()
+            process.wait(timeout=15)

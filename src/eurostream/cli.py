@@ -1011,6 +1011,55 @@ def dlq_ack(
     )
 
 
+def _serve_kwargs(
+    host: str, port: int, *, reload: bool, workers: int, log_level: str | None
+) -> dict[str, Any]:
+    """Build uvicorn's arguments, rejecting combinations it cannot honour."""
+    if not 1 <= port <= 65535:
+        raise ValueError(f"port must be between 1 and 65535, got {port}")
+    if reload and workers > 1:
+        raise ValueError("--reload supervises a single process; drop --workers or --reload")
+    kwargs: dict[str, Any] = {"app": "eurostream.api:app", "host": host, "port": port}
+    if reload:
+        # Reload spawns its own reloader process; workers would nest.
+        kwargs["reload"] = True
+    else:
+        kwargs["workers"] = workers
+    if log_level:
+        kwargs["log_level"] = log_level
+    return kwargs
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Address to bind"),
+    port: int = typer.Option(
+        7860, "--port", "-p", help="Port to bind (7860, as the container does)"
+    ),
+    reload: bool = typer.Option(False, "--reload", help="Restart on source changes (development)"),
+    workers: int = typer.Option(1, "--workers", min=1, help="Worker processes"),
+    log_level: str = typer.Option(
+        None, "--log-level", help="uvicorn level: critical/error/warning/info/debug/trace"
+    ),
+) -> None:
+    """Run the API server — the same app the container runs.
+
+    `uvicorn eurostream.api:app` typed by hand, the Dockerfile CMD and
+    this command are now one thing, so the README, the load-test harness
+    and the Prometheus scrape config all start the server the same way."""
+    try:
+        kwargs = _serve_kwargs(host, port, reload=reload, workers=workers, log_level=log_level)
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from None
+
+    typer.echo(f"serving eurostream.api:app on http://{host}:{port}")
+    typer.echo(f"  health: http://{host}:{port}/health     api: http://{host}:{port}/docs")
+    import uvicorn
+
+    uvicorn.run(**kwargs)
+
+
 @app.command()
 def worker(poll_timeout: float = typer.Option(0.2, help="Seconds between polls")) -> None:
     """Run the erasure worker: consume erasure_requests and execute each cascade.

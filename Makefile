@@ -1,4 +1,4 @@
-.PHONY: help sync lint fmt fmt-check type test coverage contract demo docker-build docker-smoke site-install site-dev site-build site-deploy gate
+.PHONY: help sync lint fmt fmt-check type test coverage contract serve demo docker-build docker-smoke site-install site-dev site-build site-deploy gate
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -26,6 +26,9 @@ coverage: ## Run tests with line coverage report
 
 contract: ## Schema contract drift check vs committed baseline
 	uv run eurostream contracts --baseline governance/contracts.json
+
+serve: ## Run the API server on http://127.0.0.1:7860
+	uv run eurostream serve
 
 demo: ## Run the end-to-end pipeline demo
 	uv run eurostream demo
