@@ -70,7 +70,8 @@ def get_dashboard_html() -> str:
 
 <!-- Global Action Buttons -->
 <div class="flex items-center gap-2">
-<button @click="triggerProduce(100)" :disabled="actionLoading" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium shadow-sm transition disabled:opacity-50 flex items-center gap-1.5"><i class="fa-solid fa-plus"></i> Produce 100</button>
+<span class="px-2.5 py-1.5 rounded-lg text-[10px] font-mono flex items-center gap-1.5 border transition" :class="liveConnected ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-slate-800 text-slate-500 border-slate-700'" :title="liveConnected ? 'Receiving alerts over GET /stream/alerts' : 'SSE feed not connected — polling only'"><span class="h-1.5 w-1.5 rounded-full" :class="liveConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'"></span><span x-text="liveConnected ? 'LIVE FEED' : 'FEED OFFLINE'"></span><span class="text-slate-500" x-text="'· ' + liveCount + ' seen'"></span></span>
+<button @click="triggerProduce(100) :disabled="actionLoading" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium shadow-sm transition disabled:opacity-50 flex items-center gap-1.5"><i class="fa-solid fa-plus"></i> Produce 100</button>
 <button @click="triggerStream(150)" :disabled="actionLoading" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-medium shadow-sm transition disabled:opacity-50 flex items-center gap-1.5"><i class="fa-solid fa-bolt"></i> Score Stream</button>
 <button @click="triggerTransform(true)" :disabled="actionLoading" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium shadow-sm transition disabled:opacity-50 flex items-center gap-1.5"><i class="fa-solid fa-arrows-rotate"></i> Transform</button>
 </div>
@@ -101,6 +102,29 @@ def get_dashboard_html() -> str:
 <div class="flex justify-between items-start"><p class="text-xs text-slate-400 font-medium">Fraud Caught</p><span class="text-xs px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono">300s Win</span></div>
 <p class="text-3xl font-bold font-mono text-amber-400 mt-2" x-text="fraudAlerts.length"></p>
 <div class="flex items-center justify-between text-[11px] text-slate-400 mt-2 font-mono"><span>Suppressed: <b class="text-rose-400" x-text="suppressedCount"></b></span><span>SLA: <b class="text-slate-200" x-text="(stats.sla_seconds || 60) + 's'"></b></span></div>
+</div>
+</div>
+
+<!-- Error budget + live alert feed -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+<div class="p-5 rounded-2xl bg-slate-900 border border-slate-800">
+<div class="flex justify-between items-start"><p class="text-xs text-slate-400 font-medium">Error budget <span class="text-slate-600 font-mono" x-text="'· last ' + (slo.window_seconds||0) + 's'"></span></p><span class="text-[10px] px-2 py-0.5 rounded border font-mono" :class="sloState.cls" x-text="sloState.label"></span></div>
+<p class="text-3xl font-bold font-mono mt-2" :class="sloState.text" x-text="sloBudgetPct + '%'"></p>
+<div class="h-2 mt-3 rounded-full bg-slate-800 overflow-hidden"><div class="h-full rounded-full transition-all duration-500" :class="sloState.bar" :style="'width:' + sloBudgetPct + '%'"></div></div>
+<div class="flex items-center justify-between text-[11px] text-slate-400 mt-2 font-mono"><span>Burn rate: <b :class="sloBurnRate > 1 ? 'text-rose-400' : 'text-slate-200'" x-text="sloBurnRate.toFixed(2) + 'x'"></b></span><span>Success: <b class="text-slate-200" x-text="sloSuccessPct + '%'"></b></span><span>Errors: <b class="text-slate-200" x-text="formatNumber(slo.errors||0)"></b></span></div>
+</div>
+
+<div class="p-5 rounded-2xl bg-slate-900 border border-slate-800 lg:col-span-2">
+<div class="flex justify-between items-center gap-3"><p class="text-xs text-slate-400 font-medium">Live alert feed <span class="text-slate-600 font-mono" x-text="'· ' + liveCount + ' this session'"></span></p><a :href="apiUrl.replace(/\/$/,'') + '/stream/alerts'" target="_blank" rel="noopener" class="text-[10px] font-mono text-blue-400 hover:text-blue-300" title="Open the raw SSE stream in a new tab">GET /stream/alerts &#8599;</a></div>
+<div class="mt-3 space-y-1.5 max-h-44 overflow-y-auto font-mono text-[11px]">
+<template x-if="!liveAlerts.length"><p class="text-slate-500 px-1 py-2">No live alerts yet — <b class="text-slate-300">Produce</b> some events, then <b class="text-slate-300">Score Stream</b>, and they will land here without a refresh.</p></template>
+<template x-for="a in liveAlerts.slice(0,8)" :key="'live-' + a._seq">
+<div class="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-slate-950/60 border border-slate-800">
+<span class="flex items-center gap-2 min-w-0"><span class="text-slate-600" x-text="'#' + a._seq"></span><b class="text-white" x-text="a.rule"></b><span class="text-blue-400 truncate" x-text="a.customer_id"></span></span>
+<span class="text-slate-500 whitespace-nowrap" x-text="formatTime(a.alert_ts)"></span>
+</div>
+</template>
+</div>
 </div>
 </div>
 
@@ -416,6 +440,10 @@ function dashboard(){
   stats:{}, fraudAlerts:[], customers:[], audits:[], dq:[], metricsText:'', rawMetrics:{counters:{}, gauges:{}, histograms:{}},
   backend:'sqlite', watermark:'', goldWatermark:'', lineage:'', suppressedCount:0,
   fraudFilter:'ALL', customerSearch:'', erasureCustomerId:'cust_424242', erasureRunning:false, erasureResult:null,
+  // Live SSE feed (GET /stream/alerts). Polling stays as the fallback, so a
+  // browser without EventSource — or a proxy that eats the stream — still
+  // sees data, just six seconds later.
+  liveAlerts:[], liveCount:0, liveConnected:false, sse:null,
   metricFilter:'', metricsView:'ui',
 
   get filteredAlerts(){
@@ -460,11 +488,41 @@ function dashboard(){
    if(!h || !h.count) return 0;
    return (h.sum / h.count);
   },
+  // Rolling SLO from /stats — the same numbers /metrics/prometheus exposes.
+  get slo(){ return (this.stats && this.stats.slo) || {}; },
+  get sloBudgetPct(){ const v = this.slo.budget_remaining; return typeof v === 'number' ? Math.max(0, Math.round(v*100)) : 100; },
+  get sloBurnRate(){ const v = this.slo.burn_rate; return typeof v === 'number' ? v : 0; },
+  get sloSuccessPct(){ const v = this.slo.success_ratio; return typeof v === 'number' ? Math.round(v*1000)/10 : 100; },
+  get sloState(){
+   if(this.sloBurnRate > 1) return {label:'BUDGET BREACH', cls:'bg-rose-500/10 text-rose-400 border-rose-500/30', text:'text-rose-400', bar:'bg-rose-500'};
+   if(this.sloBurnRate > 0.5) return {label:'WATCH', cls:'bg-amber-500/10 text-amber-400 border-amber-500/30', text:'text-amber-400', bar:'bg-amber-500'};
+   return {label:'HEALTHY', cls:'bg-emerald-500/10 text-emerald-400 border-emerald-500/30', text:'text-emerald-400', bar:'bg-emerald-500'};
+  },
+
+  connectFeed(){
+   if(typeof window.EventSource === 'undefined') return;
+   const url = this.apiUrl.replace(/\/$/, '') + '/stream/alerts';
+   try{ this.sse = new EventSource(url); }catch(e){ this.liveConnected = false; return; }
+   this.sse.addEventListener('alert', (e) => {
+    try{
+     const payload = JSON.parse(e.data);
+     this.liveCount += 1;
+     // `id:` is the broker's resume point: EventSource replays from it on a
+     // reconnect, so ids stay contiguous across a dropped connection.
+     payload._seq = Number(e.id) || this.liveCount;
+     this.liveAlerts = [payload, ...this.liveAlerts].slice(0, 50);
+    }catch(_){ /* a malformed frame must not kill the feed */ }
+   });
+   this.sse.onopen = () => { this.liveConnected = true; };
+   this.sse.onerror = () => { this.liveConnected = false; };
+  },
+  disconnectFeed(){ if(this.sse){ this.sse.close(); this.sse = null; } this.liveConnected = false; },
 
   async init(){
    await this.fetchAll();
    this.renderCharts();
    this.pollTimer = setInterval(() => this.fetchTelemetry(), 6000);
+   this.connectFeed();
   },
 
   setTab(t){
