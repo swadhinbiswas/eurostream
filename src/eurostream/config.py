@@ -160,6 +160,24 @@ class Settings(BaseSettings):
         description="text for a terminal, json (one object per line) for a log drain",
     )
 
+    dq_freshness_seconds: float = Field(
+        default=3600.0,
+        gt=0,
+        description=(
+            "Fail a data-quality layer whose newest event is older than this "
+            "many seconds — pick a limit that matches your traffic pattern"
+        ),
+    )
+    dq_volume_drop_pct: float = Field(
+        default=50.0,
+        ge=0,
+        le=100,
+        description=(
+            "Fail a table whose row count fell by more than this percentage "
+            "since the previous quality run"
+        ),
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

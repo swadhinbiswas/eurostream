@@ -1234,7 +1234,11 @@ def create_app(
                 lineage.complete("build_gold")
 
         def quality_gate() -> None:
-            report = DataQualityEngine(warehouse).run_all()
+            report = DataQualityEngine(
+                warehouse,
+                freshness_seconds=settings.dq_freshness_seconds,
+                volume_drop_pct=settings.dq_volume_drop_pct,
+            ).run_all()
             if not report.all_passed:
                 failed = [r.check_name for r in report.results if not r.passed]
                 raise RuntimeError(f"data quality gate failed: {failed}")
@@ -1274,11 +1278,19 @@ def create_app(
         """Runs the Data Quality engine and stores run history."""
         if warehouse is None:
             return service_unavailable("warehouse is not wired into this server")
-        report = DataQualityEngine(warehouse).run_all()
+        report = DataQualityEngine(
+            warehouse,
+            freshness_seconds=settings.dq_freshness_seconds,
+            volume_drop_pct=settings.dq_volume_drop_pct,
+        ).run_all()
         return {
             "status": "ok",
             "run_id": report.run_id,
             "all_passed": report.all_passed,
+            "thresholds": {
+                "freshness_seconds": settings.dq_freshness_seconds,
+                "volume_drop_pct": settings.dq_volume_drop_pct,
+            },
             "results": [
                 {"check_name": r.check_name, "passed": r.passed, "detail": r.detail}
                 for r in report.results

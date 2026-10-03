@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from eurostream.warehouse import Warehouse
+
+#: Detail prefix written by the volume check, so the next run can find the
+#: count it recorded last time.
+_VOLUME_PREFIX = "rows="
 
 _IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$")
 
@@ -76,8 +81,41 @@ class DataQualityEngine:
         "gold.fraud_summary",
     )
 
-    def __init__(self, warehouse: Warehouse) -> None:
+    #: Table -> column holding its newest event/user time. One entry per
+    #: layer, so a stalled consumer in Silver or Gold is as visible as a
+    #: stalled ingest in Bronze: freshness is asked of every layer, not just
+    #: the front door.
+    FRESHNESS_COLUMNS: dict[str, str] = {
+        "bronze.orders": "occurred_at",
+        "bronze.clicks": "occurred_at",
+        "bronze.payments": "occurred_at",
+        "silver.customers": "last_seen",
+        "silver.orders": "occurred_at",
+        "silver.payments": "occurred_at",
+        "gold.customer_360": "last_seen",
+        "gold.order_facts": "occurred_at",
+        "gold.fraud_summary": "last_alert",
+    }
+
+    #: Tables whose row count is watched for an unexpected collapse — the
+    #: "a transform silently wiped a table" failure mode.
+    VOLUME_TABLES = tuple(FRESHNESS_COLUMNS)
+
+    def __init__(
+        self,
+        warehouse: Warehouse,
+        *,
+        freshness_seconds: float = 3600.0,
+        volume_drop_pct: float = 50.0,
+    ) -> None:
         self._warehouse = warehouse
+        #: A layer whose newest event is older than this is stalled, not
+        #: quiet. Freshness is wall-clock by nature, so the limit is a knob.
+        self._freshness_seconds = float(freshness_seconds)
+        #: Row counts are only compared against the previous run's, so this
+        #: is a *relative* limit: baseline, growth and small erasures pass,
+        #: a table that lost more than half of itself does not.
+        self._volume_drop_pct = float(volume_drop_pct)
 
     def run_all(self) -> DQReport:
         report = DQReport(run_id=str(uuid.uuid4()))
@@ -108,6 +146,8 @@ class DataQualityEngine:
                 ),
             ),
             ("suppression_enforced", self._check_suppression_enforced),
+            ("freshness", self._check_freshness),
+            ("volume", self._check_volume),
         ]
         for name, check in groups:
             try:
@@ -260,6 +300,140 @@ class DataQualityEngine:
                     f"{leaked} suppressed customers present — erasure did not hold"
                     if leaked
                     else "",
+                )
+            )
+        return results
+
+    # -------------------------------------------------- freshness / volume
+
+    def _newest(self, table: str, column: str) -> float | None:
+        """Newest timestamp in ``table``, or None when it holds no rows."""
+        _safe_identifier(table)
+        _safe_identifier(column)
+        rows = self._warehouse.query(
+            f"SELECT max({column}) AS newest FROM {table}",  # noqa: S608
+            local_only=True,
+        )
+        value = rows[0].get("newest") if rows else None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return None
+        return None
+
+    def _check_freshness(self) -> list[DQCheckResult]:
+        """Is every layer keeping up with its source?
+
+        ``now - max(newest)`` per table, one check per layer: a stalled
+        consumer in Gold looks exactly like a stalled ingest in Bronze, and
+        both are worth failing the gate for. An empty table is not stale —
+        there is nothing to be behind — so it passes with that said.
+        """
+        now = time.time()
+        results: list[DQCheckResult] = []
+        for table, column in self.FRESHNESS_COLUMNS.items():
+            name = f"freshness.{table}"
+            try:
+                newest = self._newest(table, column)
+            except Exception as exc:  # noqa: BLE001 - a broken check is a failed check
+                results.append(
+                    DQCheckResult(name, False, f"check could not run: {type(exc).__name__}: {exc}")
+                )
+                continue
+            if newest is None:
+                results.append(DQCheckResult(name, True, "empty — nothing to be stale"))
+                continue
+            lag = now - newest
+            results.append(
+                DQCheckResult(
+                    name,
+                    lag <= self._freshness_seconds,
+                    f"newest event {lag:.0f}s ago (limit {self._freshness_seconds:.0f}s)",
+                )
+            )
+        return results
+
+    def _row_count(self, table: str) -> int:
+        _safe_identifier(table)
+        rows = self._warehouse.query(
+            f"SELECT count(*) AS c FROM {table}",  # noqa: S608
+            local_only=True,
+        )
+        return _count(rows[0], "c")
+
+    def _previous_volume(self, check_name: str) -> int | None:
+        """The count this check recorded the last time it ran (None = first run)."""
+        rows = self._warehouse.query(
+            "SELECT detail FROM governance.data_quality_runs "
+            "WHERE check_name = ? ORDER BY checked_at DESC LIMIT 1",
+            (check_name,),
+            local_only=True,
+        )
+        if not rows:
+            return None
+        detail = rows[0].get("detail")
+        match = re.search(re.escape(_VOLUME_PREFIX) + r"(\d+)", str(detail))
+        return int(match.group(1)) if match else None
+
+    def _check_volume(self) -> list[DQCheckResult]:
+        """Did any table lose a large share of its rows since the last run?
+
+        Row counts are only compared against what this check itself recorded
+        before, which makes the check self-baselining: a fresh warehouse, a
+        growing table and a DSAR that removed a customer all pass, while a
+        transform that wiped half a table (or emptied it outright) fails with
+        both numbers in the detail. There is no absolute expected count to
+        keep in config, so the threshold never goes stale as data grows.
+        """
+        results: list[DQCheckResult] = []
+        for table in self.VOLUME_TABLES:
+            name = f"volume.{table}"
+            try:
+                current = self._row_count(table)
+                previous = self._previous_volume(name)
+            except Exception as exc:  # noqa: BLE001 - a broken check is a failed check
+                results.append(
+                    DQCheckResult(name, False, f"check could not run: {type(exc).__name__}: {exc}")
+                )
+                continue
+
+            if previous is None:
+                results.append(DQCheckResult(name, True, f"{_VOLUME_PREFIX}{current} (baseline)"))
+                continue
+            if previous == 0:
+                results.append(
+                    DQCheckResult(name, True, f"{_VOLUME_PREFIX}{current} (first rows, was 0)")
+                )
+                continue
+            if current == 0:
+                results.append(
+                    DQCheckResult(
+                        name,
+                        False,
+                        f"{_VOLUME_PREFIX}0 (was {previous}) — table was emptied",
+                    )
+                )
+                continue
+
+            change = (current - previous) / previous * 100.0
+            if change < -self._volume_drop_pct:
+                results.append(
+                    DQCheckResult(
+                        name,
+                        False,
+                        f"{_VOLUME_PREFIX}{current} (was {previous}, {change:.0f}%) — "
+                        f"dropped more than {self._volume_drop_pct:.0f}% since the last run",
+                    )
+                )
+                continue
+            results.append(
+                DQCheckResult(
+                    name,
+                    True,
+                    f"{_VOLUME_PREFIX}{current} (was {previous}, {change:+.0f}%)",
                 )
             )
         return results

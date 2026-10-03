@@ -250,7 +250,11 @@ def transform(
             lineage.complete("build_gold")
 
     def quality_gate() -> None:
-        report = DataQualityEngine(warehouse).run_all()
+        report = DataQualityEngine(
+            warehouse,
+            freshness_seconds=settings.dq_freshness_seconds,
+            volume_drop_pct=settings.dq_volume_drop_pct,
+        ).run_all()
         if not report.all_passed:
             failed = [r.check_name for r in report.results if not r.passed]
             raise RuntimeError(f"data quality gate failed: {failed}")
@@ -682,7 +686,12 @@ def _pii_scan(warehouse: Warehouse, classifier: PIIClassifier) -> Callable[[], N
 
 def _quality_gate(warehouse: Warehouse) -> Callable[[], None]:
     def fn() -> None:
-        report = DataQualityEngine(warehouse).run_all()
+        settings = get_settings()
+        report = DataQualityEngine(
+            warehouse,
+            freshness_seconds=settings.dq_freshness_seconds,
+            volume_drop_pct=settings.dq_volume_drop_pct,
+        ).run_all()
         if not report.all_passed:
             failed = [r.check_name for r in report.results if not r.passed]
             raise RuntimeError(f"data quality gate failed: {failed}")
