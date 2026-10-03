@@ -5,6 +5,7 @@ import logging
 import re
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +32,14 @@ _HELP = {
     "erasure_latency": "End-to-end latency of a right-to-erasure request.",
     "erasure_queue_depth": "Erasure requests waiting to be executed.",
     "malformed_erasure_requests": "Erasure records dropped as unparseable.",
+    "http_success_ratio": "Share of requests in the rolling window that were not 5xx.",
+    "http_error_budget_burn_rate": (
+        "Observed 5xx rate divided by the rate the SLO allows; "
+        "1.0 is spending the budget exactly as planned, above 1.0 faster."
+    ),
+    "http_error_budget_remaining": (
+        "Share of the rolling window's error budget still unspent, from 1 down to 0."
+    ),
 }
 
 
@@ -96,12 +105,24 @@ class Metrics:
     trailing newline — so the endpoint can be scraped as-is.
     """
 
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        *,
+        slo_target: float = 0.99,
+        slo_window_seconds: float = 300.0,
+    ) -> None:
         self._counters: dict[str, int] = {}
         self._gauges: dict[str, float] = {}
         self._histograms: dict[str, _Histogram] = {}
         self._lock = threading.Lock()
         self._path = path
+        # Rolling request outcomes for the SLO. Individual events (not just a
+        # count) are kept so the window can expire: a counter cannot say how
+        # the last five minutes went, only how all time went.
+        self._requests: deque[tuple[float, int]] = deque()
+        self._slo_target = float(slo_target)
+        self._slo_window = float(slo_window_seconds)
         # Baseline series: a scrape must never come back empty, even before
         # the first request, otherwise monitoring reads it as a dead exporter.
         self._gauges[_series_key("up", None)] = 1.0
@@ -121,16 +142,80 @@ class Metrics:
         with self._lock:
             self._histograms.setdefault(key, _Histogram()).observe(value)
 
+    def record_request(self, status: int, *, ts: float | None = None) -> None:
+        """Feed one HTTP outcome into the SLO window.
+
+        5xx is an availability error; 4xx is the caller's problem and must not
+        spend the budget (otherwise a client sending bad IDs looks like an
+        outage).
+        """
+        now = time.time() if ts is None else ts
+        with self._lock:
+            self._requests.append((now, 1 if status >= 500 else 0))
+            self._prune_locked(now)
+
+    def _prune_locked(self, now: float) -> None:
+        # The window ends at the later of wall-clock and the newest sample, so
+        # injected or clock-skewed timestamps cannot expire live traffic early.
+        if self._requests:
+            now = max(now, self._requests[-1][0])
+        cutoff = now - self._slo_window
+        requests = self._requests
+        while requests and requests[0][0] < cutoff:
+            requests.popleft()
+
+    def slo(self) -> dict[str, float]:
+        """SLO state for the rolling window.
+
+        ``burn_rate`` is observed error rate over the rate the objective
+        allows: 1.0 means the budget is being spent exactly as planned, 2.0
+        twice as fast (an hour of budget gone in thirty minutes). No traffic
+        is a full budget and a perfect ratio, not a divide-by-zero.
+        """
+        with self._lock:
+            self._prune_locked(time.time())
+            total = len(self._requests)
+            errors = sum(error for _, error in self._requests)
+        allowed_error_rate = 1.0 - self._slo_target
+        success_ratio = 1.0 if total == 0 else (total - errors) / total
+        observed_rate = 0.0 if total == 0 else errors / total
+        burn_rate = 0.0 if allowed_error_rate <= 0 else observed_rate / allowed_error_rate
+        remaining = 1.0 if total == 0 else max(0.0, min(1.0, 1.0 - burn_rate))
+        return {
+            "window_seconds": self._slo_window,
+            "target": self._slo_target,
+            "requests": float(total),
+            "errors": float(errors),
+            "success_ratio": success_ratio,
+            "burn_rate": burn_rate,
+            "budget_remaining": remaining,
+        }
+
+    def _slo_gauges(self) -> dict[str, float]:
+        """The SLO numbers as labelled series keys, ready to render."""
+        slo = self.slo()
+        window = {"window": f"{int(slo['window_seconds'])}s"}
+        return {
+            _series_key("http_success_ratio", window): slo["success_ratio"],
+            _series_key("http_error_budget_burn_rate", window): slo["burn_rate"],
+            _series_key("http_error_budget_remaining", window): slo["budget_remaining"],
+        }
+
     def snapshot(self) -> dict[str, object]:
         with self._lock:
-            return {
-                "counters": dict(self._counters),
-                "gauges": dict(self._gauges),
-                "histograms": {
-                    k: {"count": h.count, "sum": h.total, "max": h.max_value}
-                    for k, h in self._histograms.items()
-                },
+            counters = dict(self._counters)
+            gauges = dict(self._gauges)
+            histograms = {
+                k: {"count": h.count, "sum": h.total, "max": h.max_value}
+                for k, h in self._histograms.items()
             }
+        # Read after releasing the lock: slo() takes it itself.
+        return {
+            "counters": counters,
+            "gauges": gauges,
+            "histograms": histograms,
+            "slo": self.slo(),
+        }
 
     def flush(self) -> None:
         if self._path is None:
@@ -150,6 +235,9 @@ class Metrics:
             counters = dict(self._counters)
             gauges = dict(self._gauges)
             histograms = {k: (h.count, h.total, h.max_value) for k, h in self._histograms.items()}
+        # Derived at scrape time: an error budget that is only recomputed when
+        # traffic arrives would read stale the moment it matters.
+        gauges.update(self._slo_gauges())
 
         lines: list[str] = []
         emitted: set[str] = set()
@@ -172,7 +260,9 @@ class Metrics:
             target = _exported_name(metric_name, "gauge")
             header(metric_name, "gauge", target)
             value = gauges[key]
-            rendered = int(value) if float(value).is_integer() else value
+            # Integers render bare; floats are rounded so a budget of
+            # 49.99999999999996 does not reach the scrape payload.
+            rendered = int(value) if float(value).is_integer() else round(value, 6)
             lines.append(f"{target}{labelset} {rendered}")
 
         for key in sorted(histograms):

@@ -293,6 +293,7 @@ def create_app(
         route = request.scope.get("route")
         path_label = getattr(route, "path", None) or "/"
         metrics.observe("http_request_duration_seconds", elapsed)
+        metrics.record_request(response.status_code)
         metrics.incr(
             "http_requests_total",
             labels={
@@ -408,6 +409,8 @@ def create_app(
             "suppressed_customers": len(erasure.suppressed_customers()),
             "turso_connected": warehouse.turso is not None if warehouse else False,
             "source": "duckdb" if warehouse is not None else "none",
+            # Rolling SLO: the dashboard's error-budget panel reads this.
+            "slo": metrics.slo(),
         }
         if warehouse is not None:
             try:
