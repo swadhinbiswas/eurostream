@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import random
+import re
+import shutil
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -414,6 +417,295 @@ def verify_audit(
     for problem in errors:
         typer.secho(f"  - {problem}", fg=typer.colors.RED, err=True)
     raise typer.Exit(1)
+
+
+# ------------------------------------------------------- backup / restore
+BACKUP_FORMAT = 1
+
+
+#: Table names arrive from a manifest — untrusted input — so they are
+#: validated as schema.table identifiers before they reach SQL at all.
+_TABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _safe_table(name: object) -> str:
+    text = str(name)
+    if not _TABLE_NAME.match(text):
+        raise ValueError(f"not a safe table identifier: {text!r}")
+    return text
+
+
+def _as_int(value: object) -> int:
+    """Read a manifest/aggregate value as int; rows are ``dict[str, object]``
+    precisely because they came from JSON, so the conversion is explicit."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _bare_settings() -> Settings:
+    """Settings and logging only — for commands that are about to replace
+    the bus and warehouse files, so nothing holds a handle on them."""
+    settings = get_settings()
+    configure_logging(settings.log_level, settings.log_format)
+    return settings
+
+
+def _snapshot_sources(settings: Settings) -> list[tuple[str, Path]]:
+    """(name inside the snapshot, source path) for everything worth keeping.
+
+    The lake and the metrics log are deliberately absent: both are derived
+    from the warehouse and rebuildable, while the warehouse itself and the
+    hash-chained audit trail are what a DSAR or an auditor asks for.
+    """
+    warehouse_file = Path(settings.warehouse_path)
+    wal = Path(str(warehouse_file) + ".wal")
+    sources: list[tuple[str, Path]] = [("warehouse.duckdb", warehouse_file)]
+    if wal.exists() and wal.stat().st_size:
+        sources.append(("warehouse.duckdb.wal", wal))
+    sources.append(("erasure_audit.jsonl", Path(settings.audit_log_path)))
+    return sources
+
+
+@app.command()
+def backup(
+    out: Path = typer.Option(
+        None, "--out", "-o", help="Snapshot directory (default: <data_dir>/backups/<timestamp>)"
+    ),
+    label: str = typer.Option("", "--label", help="Name prefix for the default directory"),
+) -> None:
+    """Snapshot the warehouse and the audit log into a checksummed directory.
+
+    Writes the files, a manifest of sha256 checksums, per-table row counts
+    and the audit chain's seq/tip — enough to prove later that what was
+    restored is what was taken. Exits 1 rather than writing over an
+    existing snapshot."""
+    settings, bus, warehouse, _, _ = _fresh()
+    stamp = time.strftime("%Y%m%dT%H%M%S")
+    dest = (
+        Path(out)
+        if out
+        else settings.data_dir / "backups" / (f"{label}-{stamp}" if label else stamp)
+    )
+
+    if (dest / "manifest.json").exists():
+        warehouse.close()
+        bus.close()
+        typer.secho(
+            f"refusing to overwrite an existing backup: {dest}", fg=typer.colors.RED, err=True
+        )
+        raise typer.Exit(1)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Flush the WAL into the file we are about to copy, or the snapshot
+        # would be a frame behind the database it claims to represent.
+        warehouse.conn.execute("CHECKPOINT")
+    except Exception as exc:  # noqa: BLE001 - report and fail, never ship a torn backup
+        warehouse.close()
+        bus.close()
+        typer.secho(f"could not checkpoint the warehouse: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+
+    files: dict[str, dict[str, object]] = {}
+    for name, source in _snapshot_sources(settings):
+        if not source.exists():
+            continue
+        target = dest / name
+        shutil.copy2(source, target)
+        files[name] = {
+            "sha256": _sha256(target),
+            "bytes": target.stat().st_size,
+            "source": str(source),
+        }
+
+    tables: dict[str, int] = {}
+    for table in Warehouse.TURSO_TABLES:
+        try:
+            tables[table] = int(
+                warehouse.scalar(f"SELECT count(*) FROM {_safe_table(table)}", local_only=True)  # noqa: S608
+            )
+        except Exception as exc:  # noqa: BLE001 - an uncountable table is not fatal to the copy
+            logging.getLogger(__name__).debug("backup could not count %s: %s", table, exc)
+
+    audit_path = Path(settings.audit_log_path)
+    chain = AuditChain(audit_path)
+    audit_records = 0
+    if audit_path.exists():
+        audit_records = sum(1 for line in audit_path.read_text().splitlines() if line.strip())
+
+    manifest = {
+        "format": BACKUP_FORMAT,
+        "created_at": time.time(),
+        "files": files,
+        "tables": tables,
+        "rows_total": sum(tables.values()),
+        "audit": {"records": audit_records, "seq": chain.seq, "tip": chain.tip},
+    }
+    (dest / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True))
+
+    warehouse.close()
+    bus.close()
+
+    typer.secho(f"backup written to {dest}", fg=typer.colors.GREEN)
+    for name, meta in files.items():
+        typer.echo(
+            f"  {name:<24} {_as_int(meta['bytes']):>9} bytes  sha256={str(meta['sha256'])[:12]}"
+        )
+    typer.echo(
+        f"  tables: {len(tables)} captured, {sum(tables.values())} rows total; "
+        f"audit: {audit_records} record(s), chain seq {chain.seq}"
+    )
+    typer.echo(f"manifest: {dest / 'manifest.json'}")
+
+
+@app.command()
+def restore(
+    snapshot: Path = typer.Argument(..., help="Directory produced by `eurostream backup`"),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Overwrite an existing warehouse or audit log"
+    ),
+) -> None:
+    """Restore a snapshot, refusing to touch anything if its checksums fail.
+
+    Checksums are verified *before* the first byte is written over the live
+    data — restoring a corrupt backup destroys the good copy it replaces —
+    and the result is verified afterwards: row counts against the manifest,
+    then the audit chain and its agreement with the warehouse copy.
+    Targets come from this deployment's settings, never from the manifest,
+    so a hand-edited manifest cannot redirect a restore elsewhere."""
+    settings = _bare_settings()
+    snapshot = Path(snapshot)
+    manifest_path = snapshot / "manifest.json"
+    if not manifest_path.exists():
+        typer.secho(
+            f"no manifest.json in {snapshot} — not a EuroStream backup",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError as exc:
+        typer.secho(f"manifest is not valid JSON: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+    if int(manifest.get("format") or 0) != BACKUP_FORMAT:
+        typer.secho(
+            f"unsupported backup format: {manifest.get('format')!r} "
+            f"(this build reads {BACKUP_FORMAT})",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    files = manifest.get("files") or {}
+    if not isinstance(files, dict) or not files:
+        typer.secho("manifest lists no files", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    targets = {
+        "warehouse.duckdb": Path(settings.warehouse_path),
+        "warehouse.duckdb.wal": Path(str(settings.warehouse_path) + ".wal"),
+        "erasure_audit.jsonl": Path(settings.audit_log_path),
+    }
+    for name, meta in files.items():
+        # A manifest is untrusted input: the name is only ever a file
+        # inside the snapshot, and the target only ever a path we chose.
+        if Path(str(name)).name != name or name not in targets:
+            typer.secho(f"refusing to restore unknown file {name!r}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+        path = snapshot / str(name)
+        if not path.exists():
+            typer.secho(f"snapshot is missing {name}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+        digest = _sha256(path)
+        if digest != str(meta.get("sha256", "")):
+            typer.secho(
+                f"checksum mismatch for {name}: snapshot is corrupt — nothing was restored",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(1)
+    typer.echo(f"verified {len(files)} file checksum(s)")
+
+    existing = [str(t) for n, t in targets.items() if n in files and t.exists()]
+    if existing and not force:
+        typer.secho(
+            "refusing to overwrite existing data:\n  " + "\n  ".join(existing) + "\nuse --force",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    stale_wal = Path(str(settings.warehouse_path) + ".wal")
+    if "warehouse.duckdb.wal" not in files and stale_wal.exists():
+        # A WAL left by the database being replaced would be replayed on top
+        # of the restored file and corrupt it.
+        stale_wal.unlink()
+
+    for name, meta in files.items():
+        target = targets[str(name)]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            target.unlink()
+        shutil.copy2(snapshot / str(name), target)
+        typer.echo(f"restored {name} -> {target} ({_as_int(meta.get('bytes'))} bytes)")
+
+    problems: list[str] = []
+    warehouse = Warehouse(settings.warehouse_path)
+    try:
+        for table, expected in (manifest.get("tables") or {}).items():
+            try:
+                actual = int(
+                    warehouse.scalar(f"SELECT count(*) FROM {_safe_table(table)}", local_only=True)  # noqa: S608
+                )
+            except Exception as exc:  # noqa: BLE001 - unreadable is a restore failure
+                problems.append(f"{table}: unreadable after restore ({exc})")
+                continue
+            if actual != _as_int(expected):
+                problems.append(f"{table}: {actual} rows restored, manifest says {expected}")
+
+        expected_rows: list[dict[str, object]] | None = None
+        try:
+            expected_rows = warehouse.query(
+                "SELECT * FROM governance.erasure_audit_log", local_only=True
+            )
+        except Exception as exc:  # noqa: BLE001 - say so rather than skip silently
+            problems.append(f"warehouse audit table unreadable: {exc}")
+        audit = verify_audit_log(settings.audit_log_path, expected=expected_rows)
+        if not audit.ok:
+            problems.extend(audit.errors)
+    finally:
+        warehouse.close()
+
+    if problems:
+        typer.secho("restore finished with problems:", fg=typer.colors.RED, err=True)
+        for problem in problems:
+            typer.secho(f"  - {problem}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    typer.secho(
+        "restore verified: row counts match the manifest and the audit chain "
+        "is intact in both copies",
+        fg=typer.colors.GREEN,
+    )
 
 
 # ------------------------------------------------------------------- dlq

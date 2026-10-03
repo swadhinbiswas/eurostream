@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import json as _json
 import threading
@@ -13,7 +14,9 @@ from eurostream.cli import DLQ_TOPIC, ERASURE_TOPIC, app
 from eurostream.config import get_settings
 from eurostream.governance.erasure import ErasureService
 from eurostream.metrics import Metrics
+from eurostream.models import ErasureRequested
 from eurostream.portal import build_portal_html
+from eurostream.producers import EventGenerator
 from eurostream.warehouse import Warehouse
 
 runner = CliRunner()
@@ -290,3 +293,172 @@ def test_cli_dlq_on_an_empty_queue(tmp_path, monkeypatch):
     assert help_out.exit_code == 0
     for command in ("list", "requeue", "ack"):
         assert command in help_out.output
+
+
+# ------------------------------------------------------- backup / restore
+
+
+def _seed_backup_state(tmp_path, monkeypatch) -> None:
+    """Populate the warehouse and the audit log for a backup, closing every
+    handle so the CLI that later restores owns the file outright."""
+    _point_cli_at(tmp_path, monkeypatch)
+    settings = get_settings()
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    settings.audit_log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    bus = open_bus(settings.data_dir / "events.db")
+    warehouse = Warehouse(settings.warehouse_path)
+    warehouse.append_order(EventGenerator(settings).order(customer_id="cust_seed", consent=True))
+    service = ErasureService(
+        warehouse=warehouse,
+        producer=bus,
+        consumer=bus.consumer("erasure_requests", "seed", auto_offset_reset="earliest"),
+        audit_log_path=settings.audit_log_path,
+        metrics=Metrics(),
+        sla_seconds=60,
+    )
+    service.execute(
+        ErasureRequested(
+            event_id="req-seed",
+            occurred_at=time.time(),
+            request_id="req-seed",
+            customer_id="cust_seed",
+        )
+    )
+    warehouse.close()
+    bus.close()
+
+
+def test_cli_backup_writes_a_checksummed_snapshot(tmp_path, monkeypatch):
+    _seed_backup_state(tmp_path, monkeypatch)
+    dest = tmp_path / "snap"
+
+    res = runner.invoke(app, ["backup", "--out", str(dest)])
+    assert res.exit_code == 0, res.output
+    assert "backup written to" in res.output
+
+    manifest = json.loads((dest / "manifest.json").read_text())
+    assert manifest["format"] == 1
+    assert {"warehouse.duckdb", "erasure_audit.jsonl"} <= set(manifest["files"])
+
+    # The recorded digests are the digests of the bytes that were written.
+    digest = hashlib.sha256((dest / "warehouse.duckdb").read_bytes()).hexdigest()
+    assert manifest["files"]["warehouse.duckdb"]["sha256"] == digest
+    audit_digest = hashlib.sha256((dest / "erasure_audit.jsonl").read_bytes()).hexdigest()
+    assert manifest["files"]["erasure_audit.jsonl"]["sha256"] == audit_digest
+
+    # Row counts and the chain tip are the evidence used to verify a restore.
+    assert manifest["tables"]["governance.erasure_audit_log"] == 1
+    assert manifest["tables"]["governance.suppression_registry"] == 1
+    assert manifest["tables"]["bronze.orders"] == 1  # anonymised, not deleted
+    assert manifest["audit"] == {
+        "records": 1,
+        "seq": 1,
+        "tip": manifest["audit"]["tip"],
+    }
+    assert manifest["audit"]["tip"]
+    assert str(dest / "manifest.json") in res.output
+
+    # A snapshot is never written over another one.
+    again = runner.invoke(app, ["backup", "--out", str(dest)])
+    assert again.exit_code == 1
+    assert "refusing to overwrite an existing backup" in again.output
+
+
+def test_cli_restore_round_trips_the_warehouse_and_the_audit_chain(tmp_path, monkeypatch):
+    _seed_backup_state(tmp_path, monkeypatch)
+    settings = get_settings()
+    dest = tmp_path / "snap"
+    assert runner.invoke(app, ["backup", "--out", str(dest)]).exit_code == 0
+    manifest = json.loads((dest / "manifest.json").read_text())
+
+    # Destroy the live data: rows gone, audit trail replaced with a lie.
+    warehouse = Warehouse(settings.warehouse_path)
+    warehouse.conn.execute("DELETE FROM bronze.orders")
+    warehouse.conn.execute("DELETE FROM governance.suppression_registry")
+    warehouse.conn.execute("DELETE FROM governance.erasure_audit_log")
+    warehouse.close()
+    settings.audit_log_path.write_text('{"request_id": "forged"}\n')
+
+    res = runner.invoke(app, ["restore", str(dest), "--force"])
+    assert res.exit_code == 0, res.output
+    assert f"verified {len(manifest['files'])} file checksum(s)" in res.output
+    assert "row counts match the manifest and the audit chain is intact" in res.output
+
+    warehouse = Warehouse(settings.warehouse_path)
+    assert warehouse.scalar("SELECT count(*) FROM bronze.orders", local_only=True) == 1
+    assert (
+        warehouse.scalar("SELECT count(*) FROM governance.suppression_registry", local_only=True)
+        == 1
+    )
+    warehouse.close()
+
+    # Both copies agree again, and the chain verifies against them.
+    verified = runner.invoke(app, ["verify-audit"])
+    assert verified.exit_code == 0, verified.output
+    assert "intact" in verified.output.lower()
+    assert "forged" not in settings.audit_log_path.read_text()
+
+
+def test_cli_restore_refuses_to_overwrite_without_force(tmp_path, monkeypatch):
+    _seed_backup_state(tmp_path, monkeypatch)
+    dest = tmp_path / "snap"
+    assert runner.invoke(app, ["backup", "--out", str(dest)]).exit_code == 0
+
+    res = runner.invoke(app, ["restore", str(dest)])
+    assert res.exit_code == 1
+    assert "refusing to overwrite existing data" in res.output
+    assert "--force" in res.output
+
+
+def test_cli_restore_refuses_a_corrupt_snapshot_before_touching_live_data(tmp_path, monkeypatch):
+    _seed_backup_state(tmp_path, monkeypatch)
+    settings = get_settings()
+    dest = tmp_path / "snap"
+    assert runner.invoke(app, ["backup", "--out", str(dest)]).exit_code == 0
+
+    # Corrupt one byte of the snapshot's warehouse copy.
+    target = dest / "warehouse.duckdb"
+    blob = bytearray(target.read_bytes())
+    blob[len(blob) // 2] ^= 0xFF
+    target.write_bytes(bytes(blob))
+
+    # Mark the live data so we can prove it was left alone.
+    settings.audit_log_path.write_text(settings.audit_log_path.read_text() + '{"forged": 1}\n')
+
+    res = runner.invoke(app, ["restore", str(dest), "--force"])
+    assert res.exit_code == 1
+    assert "checksum mismatch" in res.output
+    assert "nothing was restored" in res.output
+    assert settings.audit_log_path.read_text().count("\n") == 2
+
+
+def test_cli_restore_rejects_an_unusable_snapshot(tmp_path, monkeypatch):
+    _point_cli_at(tmp_path, monkeypatch)
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    missing = runner.invoke(app, ["restore", str(empty)])
+    assert missing.exit_code == 1
+    assert "not a EuroStream backup" in missing.output
+
+    # A manifest is untrusted input: names stay inside the snapshot.
+    _seed_backup_state(tmp_path, monkeypatch)
+    dest = tmp_path / "snap"
+    assert runner.invoke(app, ["backup", "--out", str(dest)]).exit_code == 0
+    manifest = json.loads((dest / "manifest.json").read_text())
+    manifest["files"]["../../evil.txt"] = {"sha256": "0" * 64, "bytes": 1}
+    (dest / "manifest.json").write_text(json.dumps(manifest))
+
+    traversal = runner.invoke(app, ["restore", str(dest), "--force"])
+    assert traversal.exit_code == 1
+    assert "refusing to restore unknown file" in traversal.output
+    assert not (dest.parent.parent / "evil.txt").exists()
+
+    manifest = json.loads((dest / "manifest.json").read_text())
+    del manifest["files"]["../../evil.txt"]
+    manifest["format"] = 99
+    (dest / "manifest.json").write_text(json.dumps(manifest))
+    future = runner.invoke(app, ["restore", str(dest), "--force"])
+    assert future.exit_code == 1
+    assert "unsupported backup format" in future.output
