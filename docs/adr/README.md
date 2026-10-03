@@ -12,6 +12,8 @@ record is that it still says what we thought at the time.
 | [0003](0003-pii-classification.md)   | PII classification: pure-Python recognizers + a manifest gate, not Presidio            | Accepted | 2026-08-01 |
 | [0004](0004-resilience.md)           | Resilience: full-jitter retries behind a circuit breaker, breaker wrapping the retry   | Accepted | 2026-10-03 |
 | [0005](0005-hash-chained-audit.md)   | Erasure audit: hash chain over the JSONL trail, cross-checked against the warehouse    | Accepted | 2026-10-03 |
+| [0006](0006-data-quality-gates.md)    | Data-quality gates: self-baselined volume, per-layer freshness, measure-then-enforce k | Accepted | 2026-10-03 |
+| [0007](0007-observability.md)          | Observability: scrape the app directly; alerts and panels must name series that exist | Accepted | 2026-10-03 |
 
 ## When to write one
 
@@ -34,4 +36,4 @@ sections: **Context** (what was true, and what made this hard), **Decision**
 plainly is worth more than an implied guarantee), and **Alternatives
 considered** (why the obvious other options lost).
 
-Number the next one `0006` and add it to the table above in the same commit.
+Number the next one `0008` and add it to the table above in the same commit.
