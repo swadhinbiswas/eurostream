@@ -467,6 +467,10 @@ If you use EuroStream in academic, regulatory, or industrial data engineering re
 }
 ```
 
+## Security
+
+[`SECURITY.md`](SECURITY.md) is where a report goes, what is in scope, and — more usefully — what is not: the six limits this platform has **by design**, stated plainly rather than left to be discovered. The hash chain proves integrity but not authorship; the default PII salt is a demo convenience; the bearer token is static and optional; the rate limiter trusts `X-Forwarded-For`; suppression is enforced by a process, not a lock; and TLS terminates in front of the app. Each one points at the ADR or the code that explains it.
+
 ## License
 
 This project is available under the [MIT License](LICENSE) for academic, commercial, and research use.
