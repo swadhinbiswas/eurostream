@@ -1,6 +1,6 @@
 ---
 title: "API Reference — FastAPI Governance Endpoints"
-description: "HTTP API reference for the EuroStream governance service — erasure request intake, health with suppressed customer IDs, metrics snapshots, audit log queries and consent-aware Customer 360 reads."
+description: "HTTP API reference for the EuroStream governance service — erasure request intake and lifecycle, the live fraud-alert SSE feed, health and readiness, metrics, audit verification, consent-aware warehouse reads, plus the auth, rate-limit and problem+json error contract."
 sidebar:
   order: 2
 ---
@@ -8,6 +8,8 @@ sidebar:
 The governance API is a FastAPI app (`src/eurostream/api.py`). Run it with:
 
 ```bash
+make serve                 # eurostream serve — 127.0.0.1:7860, validated uvicorn args
+# hot reload while editing:
 uv run uvicorn eurostream.api:app --reload
 # or the container image:
 docker run -p 7860:7860 eurostream
@@ -23,6 +25,7 @@ Execution is asynchronous via the worker.
 ```bash
 curl -X POST http://localhost:7860/erasure-requests \
   -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 6b1f-42' \
   -d '{"customer_id": "cust_424242"}'
 ```
 
@@ -42,10 +45,55 @@ background worker started with the app; send `{"customer_id": "...", "sync": tru
 to run it inline and get `200 OK` with `status`, `confirmation_hash` and
 `layers_touched` back.
 
-Every mutating endpoint (`/erasure-requests`, `/erase`, `/produce`, `/stream`,
-`/transform`, `/quality-gate`, `/sync-turso`) requires
-`Authorization: Bearer $EUROSTREAM_API_TOKEN` when that variable is set, and
-answers `401` otherwise. It is unset by default so the demo stays open.
+An `Idempotency-Key` header makes a retried intake safe: the same key with the
+same customer returns the original acceptance instead of starting a second
+cascade (the `Idempotent-Replay: true` response header says which one you got).
+Reusing a key for a *different* customer — or while its first request is still
+in flight — is a `409`.
+
+### `GET /erasure-requests`
+
+The whole queue and history in one list — what an operator answers "where is
+this request?" from. It merges the intake queue (accepted, not yet executed)
+with the durable audit log, newest first:
+
+```bash
+curl 'http://localhost:7860/erasure-requests?status=queued&limit=50'
+```
+
+Query parameters: `status` (validated against the known erasure states),
+`customer_id`, `limit` (1–200, default 50) and `offset`. Reads are pinned to
+the local warehouse with `local_only`, so a compliance list never answers from
+a stale replica.
+
+### `GET /erasure-requests/{request_id}`
+
+One URL for the whole `202`-to-verdict lifecycle: the intake entry while the
+request is queued or executing, and the audit row once the cascade finished —
+`status`, `completed_at`, `layers_touched` and `confirmation_hash`. `404` if
+no such id exists, `422` if the id does not match the id pattern.
+
+### `GET /stream/alerts`
+
+Live fraud alerts as Server-Sent Events, scored by `POST /stream`:
+
+```bash
+curl -N 'http://localhost:7860/stream/alerts?duration=30'
+# event: alert
+# id: 17
+# data: {"alert_id": "...", "rule": "VELOCITY", "customer_id": "..."}
+#
+# : ping
+```
+
+- A fresh connection gets the **live tail only** — no history flood for a new
+  browser tab.
+- A client that states a resume point gets history: send the standard
+  `Last-Event-ID` header (browsers do this automatically on reconnect) or
+  `?since=<event id>`, and buffered frames replay before the live tail.
+- `heartbeat` (0.1–60s, default 15) controls the `: ping` comments that keep
+  proxies from idling the connection out; `duration` (≤ 3600s) closes the
+  stream after N seconds, which is what makes it usable in a shell.
 
 ### `GET /health`
 
@@ -67,6 +115,10 @@ Liveness plus the current suppression registry snapshot:
 requested one (for example Kafka requested but unavailable), so monitoring can
 alert on a silently falling-back process.
 
+`/health/live` is a bare liveness probe and `/health/ready` is readiness — it
+answers `503` when the warehouse cannot be queried, which is the only honest
+signal that the process should not receive traffic yet.
+
 ### `GET /metrics`
 
 Prometheus-shaped snapshot — counters, gauges, histogram summaries
@@ -81,9 +133,24 @@ Prometheus-shaped snapshot — counters, gauges, histogram summaries
 }
 ```
 
+`GET /metrics/prometheus` returns the same numbers as the Prometheus text
+exposition — that is the endpoint the stack behind `make observe` scrapes.
+
 ### `GET /governance/erasure-audit`
 
 Audit rows newest-first, straight from `governance.erasure_audit_log`.
+
+### `GET /governance/erasure-audit/verify`
+
+Verifies the tamper-evident audit trail: the hash chain over the JSONL log
+(modified records break their own hash; removed or reordered ones break the
+link after them) and, with `cross_check=true` (the default), that every
+attestation exists in both the file and the warehouse with the same contents —
+which is what catches a truncated or edited *tail*.
+
+It always answers `200`: a failed verification is a finding to act on, not a
+malformed request. Automation reads `ok`, or runs `eurostream verify-audit`,
+which exits non-zero.
 
 ### `GET /gold/customer-360?limit=100&search=acme`
 
@@ -95,7 +162,10 @@ a bound parameter; the query contains no interpolated values.
 
 Runs the data-quality gate and returns the report. Concurrent calls are safe:
 each runs on its own DuckDB connection and returns byte-identical answers for
-identical warehouse state.
+identical warehouse state. The response carries a `thresholds` block
+(`freshness_seconds`, `volume_drop_pct`, `k_anonymity`) alongside each check's
+verdict, so you can see what it was judged against rather than just whether it
+passed.
 
 ### `POST /sync-turso`
 
@@ -108,6 +178,48 @@ Pushes `Warehouse.TURSO_TABLES` to Turso and reports `table_counts` plus
 Row counts, watermarks, effective vs requested backend, `degraded`, and the
 counted `lake_files` — the number the dashboard charts read.
 
+## Auth, rate limits and errors
+
+**Bearer token.** Every mutating endpoint (`POST /erasure-requests`,
+`/erase/{id}`, `/produce`, `/stream`, `/transform`, `/quality-gate`,
+`/sync-turso`) requires `Authorization: Bearer $EUROSTREAM_API_TOKEN` when
+that variable is set, and answers `401` with a `WWW-Authenticate: Bearer`
+header otherwise. It is unset by default so the demo stays open; GET endpoints
+are never gated, which is why `/health` and `/metrics` stay scrapeable.
+
+**Rate limiting.** Mutating routes are metered by a per-client token bucket —
+`EUROSTREAM_API_RATE_LIMIT` requests/second (default 10, `0` disables) with a
+burst of `EUROSTREAM_API_RATE_LIMIT_BURST` tokens (default 20), keyed on the
+first `X-Forwarded-For` hop when present. Exceeding it answers `429` with a
+`Retry-After` header in seconds.
+
+**Errors are RFC 9457 `application/problem+json`** — one shape for every
+failure, including validation, auth, rate limiting and crashes:
+
+```json
+{
+  "type": "https://eurostream.dev/problems/service-unavailable",
+  "title": "Service unavailable",
+  "status": 503,
+  "detail": "warehouse is not wired into this server"
+}
+```
+
+| Status | When |
+|---|---|
+| `400` / `422` | malformed input, or a value that fails its pattern (reported as `field: message` pairs in `detail`) |
+| `401` / `403` | missing or wrong bearer token on a mutating route |
+| `404` | unknown request id or resource |
+| `409` | idempotency key reused with a different body |
+| `413` / `415` | payload too large, or a media type the route does not take |
+| `429` | per-client rate limit, with `Retry-After` |
+| `500` | unhandled failure — `detail` carries the `X-Request-ID` to grep for |
+| `503` | a dependency (warehouse, Turso, bus) is not wired up |
+
+Every response carries `X-Request-ID`, echoed from the request if you send
+one, and the same id appears in the structured access log line — so a
+`500 problem+json` is one header away from the traceback.
+
 ## Wiring
 
 `bootstrap()` constructs the local stack: bus, warehouse, metrics, erasure
@@ -119,7 +231,14 @@ settings, warehouse)`.
 
 - [ ] Set `EUROSTREAM_API_TOKEN` (or terminate auth at your gateway/SSO) before
       exposing `/erasure-requests`
-- [ ] Rate-limit erasure intake (it fans out work)
-- [ ] Ship `data/logs/erasure_audit.jsonl` to WORM storage
-- [ ] Scrape `/metrics/prometheus` (Prometheus text exposition) instead of
-      polling the JSONL snapshots
+- [ ] Send `X-Forwarded-For` from your proxy, or the rate limiter keys on the
+      proxy's address and every client shares one bucket
+- [ ] Raise `EUROSTREAM_API_RATE_LIMIT` above the default if your traffic is
+      batchy — the bucket allows a burst of 20 before limiting kicks in
+- [ ] Run `eurostream verify-audit` on a schedule (exit `1` means the chain or
+      the warehouse copy disagrees) and ship `data/logs/erasure_audit.jsonl`
+      to WORM storage — a chain detects edits, not an attacker holding both
+      copies
+- [ ] Back up with `eurostream backup` and rehearse a `eurostream restore`
+- [ ] Scrape `/metrics/prometheus` (or `make observe`) instead of polling the
+      JSONL snapshots
