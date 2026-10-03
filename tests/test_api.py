@@ -449,3 +449,95 @@ def test_list_erasure_requests_filters_and_pages(tmp_path):
     assert done.json()["items"][0]["duration_seconds"] >= 0
     bus.close()
     wh.close()
+
+
+def test_idempotent_erasure_intake_replays_the_first_response(tmp_path):
+    app, bus, wh, erasure = _app_with_erasure(tmp_path)
+    c = TestClient(app)
+    key = "dsar-2026-000001"
+    headers = {"Idempotency-Key": key}
+
+    first = c.post("/erasure-requests", json={"customer_id": "cust_idem"}, headers=headers)
+    second = c.post("/erasure-requests", json={"customer_id": "cust_idem"}, headers=headers)
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert second.json() == first.json()
+    assert second.headers.get("Idempotent-Replay") == "true"
+    assert first.headers.get("Idempotent-Replay") is None
+
+    # Exactly one DSAR opened, not two.
+    assert erasure.pending_requests()[0]["request_id"] == first.json()["request_id"]
+    assert len(erasure.pending_requests()) == 1
+    bus.close()
+    wh.close()
+
+
+def test_idempotent_sync_erasure_executes_once(tmp_path):
+    app, bus, wh, erasure = _app_with_erasure(tmp_path)
+    c = TestClient(app)
+    headers = {"Idempotency-Key": "dsar-sync-000001"}
+    body = {"customer_id": "cust_sync_idem", "sync": True}
+
+    first = c.post("/erasure-requests", json=body, headers=headers)
+    second = c.post("/erasure-requests", json=body, headers=headers)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.headers.get("Idempotent-Replay") == "true"
+    assert second.json()["confirmation_hash"] == first.json()["confirmation_hash"]
+    # The cascade ran once: one audit row, one tombstone.
+    rows = wh.query(
+        "SELECT count(*) AS c FROM governance.erasure_audit_log WHERE customer_id = ?",
+        ("cust_sync_idem",),
+        local_only=True,
+    )
+    assert rows[0]["c"] == 1
+    assert erasure.is_suppressed("cust_sync_idem")
+    bus.close()
+    wh.close()
+
+
+def test_idempotency_key_reused_for_another_customer_is_409(tmp_path):
+    app, bus, wh, _ = _app_with_erasure(tmp_path)
+    c = TestClient(app)
+    headers = {"Idempotency-Key": "dsar-2026-000002"}
+    assert (
+        c.post("/erasure-requests", json={"customer_id": "cust_one"}, headers=headers).status_code
+        == 202
+    )
+
+    conflict = c.post("/erasure-requests", json={"customer_id": "cust_two"}, headers=headers)
+    assert conflict.status_code == 409
+    assert conflict.headers["content-type"].startswith("application/problem+json")
+    assert conflict.json()["title"] == "Conflict"
+    bus.close()
+    wh.close()
+
+
+def test_malformed_idempotency_key_is_422(tmp_path):
+    app, bus, wh, _ = _app_with_erasure(tmp_path)
+    c = TestClient(app)
+    r = c.post(
+        "/erasure-requests",
+        json={"customer_id": "cust_x"},
+        headers={"Idempotency-Key": "no spaces"},
+    )
+    assert r.status_code == 422
+    short = c.post(
+        "/erasure-requests",
+        json={"customer_id": "cust_x"},
+        headers={"Idempotency-Key": "abc"},
+    )
+    assert short.status_code == 422
+    bus.close()
+    wh.close()
+
+
+def test_without_a_key_each_post_is_a_new_request(tmp_path):
+    app, bus, wh, erasure = _app_with_erasure(tmp_path)
+    c = TestClient(app)
+    first = c.post("/erasure-requests", json={"customer_id": "cust_free"})
+    second = c.post("/erasure-requests", json={"customer_id": "cust_free"})
+    assert first.json()["request_id"] != second.json()["request_id"]
+    assert len(erasure.pending_requests()) == 2
+    bus.close()
+    wh.close()

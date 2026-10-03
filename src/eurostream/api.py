@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
@@ -22,6 +22,11 @@ from eurostream.config import Settings
 from eurostream.dashboard import get_dashboard_html
 from eurostream.governance.erasure import ErasureAudit, ErasureService
 from eurostream.governance.pii import PIIClassifier
+from eurostream.idempotency import (
+    IDEMPOTENCY_KEY_PATTERN,
+    IdempotencyConflictError,
+    IdempotencyStore,
+)
 from eurostream.lineage import LineageEmitter
 from eurostream.logging import configure_logging, reset_request_id, set_request_id
 from eurostream.metrics import Metrics
@@ -274,6 +279,8 @@ def create_app(
     """
     effective_backend = backend or _bus_backend(bus)
     requested_backend = settings.event_bus_backend
+    # Retry safety for the one endpoint that deletes data (see idempotency.py).
+    idempotency = IdempotencyStore()
     # Format every EuroStream line the way this deployment wants it before the
     # first log fires (lifespan, worker, request handlers).
     configure_logging(settings.log_level, settings.log_format)
@@ -328,8 +335,9 @@ def create_app(
         # Credentialed CORS is only safe with an explicit origin allowlist.
         allow_credentials=not wildcard,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "X-Request-ID"] + (["Authorization"] if api_token else []),
-        expose_headers=[REQUEST_ID_HEADER],
+        allow_headers=["Content-Type", "X-Request-ID", "Idempotency-Key"]
+        + (["Authorization"] if api_token else []),
+        expose_headers=[REQUEST_ID_HEADER, "Idempotent-Replay"],
     )
 
     @app.middleware("http")
@@ -559,43 +567,99 @@ def create_app(
             202: {"description": "Request accepted and queued for execution"},
             200: {"description": "Cascade executed synchronously (sync=true)"},
             401: {"description": "Missing or invalid bearer token"},
-            422: {"description": "Invalid customer identifier"},
+            409: {"description": "Idempotency-Key reused for another customer, or still in flight"},
+            422: {"description": "Invalid customer identifier or Idempotency-Key"},
         },
     )
-    def request_erasure(body: ErasureRequest) -> Any:
+    def request_erasure(
+        body: ErasureRequest,
+        response: Response,
+        idempotency_key: Annotated[
+            str | None,
+            Header(
+                alias="Idempotency-Key",
+                pattern=IDEMPOTENCY_KEY_PATTERN,
+                description=(
+                    "Retry-safe key. Replaying the same key with the same "
+                    "customer returns the first response unchanged "
+                    "(with `Idempotent-Replay: true`); reusing it for another "
+                    "customer is a 409."
+                ),
+            ),
+        ] = None,
+    ) -> Any:
         """Accepts a GDPR Art. 17 right-to-erasure request. Enqueues a tombstone
         on the bus for the background worker; with ``sync=true`` the full
-        deletion cascade runs inline and the response carries its proof."""
-        request_id = erasure.request_erasure(
-            body.customer_id,
-            requested_by="dsar@eurocart.eu",
-        )
-        if body.sync:
-            event = ErasureRequested(
-                event_id=request_id,
-                occurred_at=time.time(),
-                request_id=request_id,
-                customer_id=body.customer_id,
-            )
-            audit = erasure.execute(event)
-            payload = {
-                "request_id": request_id,
-                "customer_id": body.customer_id,
-                "status": audit.status,
-                "confirmation_hash": audit.confirmation_hash,
-                "layers_touched": audit.layers_touched,
-                "sla_seconds": settings.erasure_sla_seconds,
-                "latency_seconds": round(audit.completed_at - audit.requested_at, 3),
-            }
-            # Executed inline, so this is a completed resource, not an accepted one.
-            return JSONResponse(status_code=200, content=payload)
+        deletion cascade runs inline and the response carries its proof.
 
-        return {
-            "request_id": request_id,
-            "customer_id": body.customer_id,
-            "status": "queued",
-            "sla_seconds": settings.erasure_sla_seconds,
-        }
+        Send ``Idempotency-Key`` when retrying: a duplicate POST replays the
+        original answer instead of opening a second DSAR.
+        """
+        key = idempotency_key
+        if key is not None:
+            try:
+                replay = idempotency.begin(key, body.customer_id)
+            except IdempotencyConflictError as exc:
+                metrics.incr("idempotency_conflicts")
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if replay is not None:
+                metrics.incr("idempotent_replays")
+                return JSONResponse(
+                    status_code=replay.status_code,
+                    content=replay.body,
+                    headers={"Idempotent-Replay": "true"},
+                )
+
+        status_code = 202
+        try:
+            request_id = erasure.request_erasure(
+                body.customer_id,
+                requested_by="dsar@eurocart.eu",
+            )
+            if body.sync:
+                event = ErasureRequested(
+                    event_id=request_id,
+                    occurred_at=time.time(),
+                    request_id=request_id,
+                    customer_id=body.customer_id,
+                )
+                audit = erasure.execute(event)
+                payload: dict[str, object] = {
+                    "request_id": request_id,
+                    "customer_id": body.customer_id,
+                    "status": audit.status,
+                    "confirmation_hash": audit.confirmation_hash,
+                    "layers_touched": audit.layers_touched,
+                    "sla_seconds": settings.erasure_sla_seconds,
+                    "latency_seconds": round(audit.completed_at - audit.requested_at, 3),
+                }
+                # Executed inline, so this is a completed resource.
+                status_code = 200
+            else:
+                payload = {
+                    "request_id": request_id,
+                    "customer_id": body.customer_id,
+                    "status": "queued",
+                    "sla_seconds": settings.erasure_sla_seconds,
+                }
+        except Exception:
+            # A failed attempt must not keep the key claimed, or the client's
+            # retry would 409 against its own half-finished request.
+            if key is not None:
+                idempotency.fail(key)
+            raise
+
+        if key is not None:
+            idempotency.complete(
+                key,
+                customer_id=body.customer_id,
+                request_id=str(payload.get("request_id") or ""),
+                status_code=status_code,
+                body=payload,
+            )
+        if status_code == 200:
+            return JSONResponse(status_code=200, content=payload)
+        return payload
 
     @app.get(
         "/erasure-requests",
