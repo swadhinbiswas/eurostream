@@ -1,0 +1,86 @@
+name: release
+
+# Publishes to PyPI with trusted publishing: OIDC, no long-lived token in
+# repository secrets (the PyPI side needs a trusted publisher configured for
+# this repo and environment — until then the publish job fails there, which
+# is the safe direction to fail in).
+#
+# Three gates stand between a tag and something someone can pip install:
+#
+#   1. the same quality gate CI runs on every push — lint, format, strict
+#      types, tests with the coverage floor, event-contract baseline;
+#   2. a build twine can actually read (a pretty wheel with broken metadata
+#      is still broken);
+#   3. version agreement between the release tag, the wheel's own metadata
+#      and eurostream.__version__.
+#
+# (3) is the one that catches a tag pushed at the wrong commit: `v0.3.0`
+# built from a tree that still says 0.2.0 would otherwise ship silently and
+# install itself over the real 0.3.0 later.
+
+permissions:
+  contents: read
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - run: uv sync --dev
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
+      - run: uv run mypy src
+      - run: uv run pytest -q --cov=eurostream --cov-report=term
+      - run: uv run eurostream contracts --baseline governance/contracts.json
+
+  build:
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - run: uv build
+      - name: The artifacts must be readable and well-formed
+        run: uvx twine check --strict dist/*
+      - name: The tag, the wheel and the module must agree on the version
+        if: github.event_name == 'release'
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          wheel="$(basename "$(ls dist/*.whl)" | cut -d- -f2)"
+          runtime="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/eurostream/__init__.py)"
+          printf 'tag=%s wheel=%s runtime=%s\n' "$tag" "$wheel" "$runtime"
+          test "$tag" = "$wheel"
+          test "$tag" = "$runtime"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    # workflow_dispatch exists to exercise the build and gate without
+    # publishing; only a published GitHub Release is allowed to upload.
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/eurostream
+    permissions:
+      id-token: write # OIDC for trusted publishing
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
