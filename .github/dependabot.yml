@@ -1,0 +1,42 @@
+# Two things in this repository go stale silently, and this file is the
+# answer to both.
+#
+# 1. Every GitHub Action is pinned to a commit SHA with a `# v4`-style
+#    comment. That is the right call for supply-chain safety and the wrong
+#    call for staying current: nobody notices a pin is fourteen months old.
+#    The `github-actions` ecosystem bumps the SHA and rewrites the comment.
+# 2. `uv.lock` is committed (reproducible installs), which means it only
+#    stops moving when someone decides to move it.
+#
+# Both run weekly. Minor and patch updates are grouped into one PR each —
+# noise reduction without hiding anything, because major versions still
+# arrive one at a time, on their own, where they get read.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
