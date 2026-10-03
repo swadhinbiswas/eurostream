@@ -95,10 +95,14 @@ def run_benchmark(iterations: int = 50) -> dict[str, float]:
         "mean_ms": statistics.mean(latencies_ms),
         "median_ms": statistics.median(latencies_ms),
         "p95_ms": (
-            statistics.quantiles(latencies_ms, n=20)[18] if len(latencies_ms) >= 20 else max(latencies_ms)
+            statistics.quantiles(latencies_ms, n=20)[18]
+            if len(latencies_ms) >= 20
+            else max(latencies_ms)
         ),
         "p99_ms": (
-            statistics.quantiles(latencies_ms, n=100)[98] if len(latencies_ms) >= 100 else max(latencies_ms)
+            statistics.quantiles(latencies_ms, n=100)[98]
+            if len(latencies_ms) >= 100
+            else max(latencies_ms)
         ),
         "min_ms": min(latencies_ms),
         "max_ms": max(latencies_ms),

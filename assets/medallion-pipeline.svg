@@ -32,7 +32,7 @@
   <rect width="260" height="3" rx="1.5" fill="url(#grad-brz)"/>
   <text x="130" y="24" text-anchor="middle" class="title">BRONZE · RAW APPEND LOG</text>
   <text x="130" y="38" text-anchor="middle" class="sub">Immutable Event Capture Layer</text>
-  
+
   <g transform="translate(14, 52)">
     <rect width="232" height="32" rx="5" fill="#1e293b"/>
     <text x="10" y="14" class="code" fill="#f59e0b">bronze.orders</text>
@@ -60,7 +60,7 @@
   <rect width="260" height="3" rx="1.5" fill="url(#grad-slv)"/>
   <text x="130" y="24" text-anchor="middle" class="title">SILVER · CLEANSED &amp; PSEUDONYMIZED</text>
   <text x="130" y="38" text-anchor="middle" class="sub">Watermarked Deduplication (MERGE)</text>
-  
+
   <g transform="translate(14, 52)">
     <rect width="232" height="32" rx="5" fill="#1e293b"/>
     <text x="10" y="14" class="code" fill="#818cf8">silver.customers</text>
@@ -88,7 +88,7 @@
   <rect width="260" height="3" rx="1.5" fill="url(#grad-gld)"/>
   <text x="130" y="24" text-anchor="middle" class="title">GOLD · BUSINESS AGGREGATES</text>
   <text x="130" y="38" text-anchor="middle" class="sub">Consent-Gated Analytics &amp; Lake</text>
-  
+
   <g transform="translate(14, 52)">
     <rect width="232" height="32" rx="5" fill="#1e293b"/>
     <text x="10" y="14" class="code" fill="#34d399">gold.customer_360</text>

@@ -42,7 +42,7 @@
   <rect width="145" height="3" rx="1.5" fill="url(#grad-sky)"/>
   <text x="72.5" y="24" text-anchor="middle" class="card-title">EU SOURCE SYSTEMS</text>
   <text x="72.5" y="40" text-anchor="middle" class="card-sub">Synthetic Event Generators</text>
-  
+
   <g transform="translate(10, 52)">
     <rect width="125" height="22" rx="5" fill="#1e293b"/>
     <text x="8" y="14" class="badge" fill="#38bdf8">▶ Orders</text>
@@ -67,7 +67,7 @@
   <rect width="145" height="3" rx="1.5" fill="url(#grad-sky)"/>
   <text x="72.5" y="24" text-anchor="middle" class="card-title">DURABLE EVENT BUS</text>
   <text x="72.5" y="40" text-anchor="middle" class="card-sub">Multi-Topic Log &amp; Replay</text>
-  
+
   <g transform="translate(10, 52)">
     <rect width="125" height="26" rx="6" fill="#0f172a" stroke="#1e293b"/>
     <text x="62.5" y="12" text-anchor="middle" class="badge" fill="#38bdf8">SqliteBus (Local WAL)</text>
@@ -88,7 +88,7 @@
   <rect width="240" height="3" rx="1.5" fill="url(#grad-amber)"/>
   <text x="120" y="20" text-anchor="middle" class="card-title">SPEED PATH · REAL-TIME FRAUD</text>
   <text x="120" y="34" text-anchor="middle" class="card-sub">Stateful Rolling Window Scorer (300s)</text>
-  
+
   <g transform="translate(12, 44)">
     <rect width="68" height="34" rx="5" fill="#1e293b"/>
     <text x="34" y="14" text-anchor="middle" class="badge" fill="#fbbf24">Velocity</text>
@@ -113,7 +113,7 @@
   <rect width="240" height="3" rx="1.5" fill="url(#grad-cyan)"/>
   <text x="120" y="20" text-anchor="middle" class="card-title">MEDALLION LAKEHOUSE PIPELINE</text>
   <text x="120" y="34" text-anchor="middle" class="card-sub">DuckDB Local Engine ⇄ Turso libSQL Cloud</text>
-  
+
   <g transform="translate(12, 46)">
     <rect width="68" height="42" rx="5" fill="#1e293b" stroke="#334155"/>
     <text x="34" y="14" text-anchor="middle" class="badge" fill="#fbbf24">BRONZE</text>
@@ -132,7 +132,7 @@
     <text x="34" y="26" text-anchor="middle" class="badge" fill="#94a3b8">Customer 360</text>
     <text x="34" y="36" text-anchor="middle" class="badge" fill="#64748b">Consent Gated</text>
   </g>
-  
+
   <g transform="translate(12, 98)">
     <rect width="216" height="40" rx="5" fill="#0f172a"/>
     <text x="108" y="14" text-anchor="middle" class="badge" fill="#38bdf8">Dual-Write Cloud Sync &amp; Watermarks</text>
@@ -147,27 +147,27 @@
   <rect width="210" height="3" rx="1.5" fill="url(#grad-rose)"/>
   <text x="105" y="20" text-anchor="middle" class="card-title">GDPR ART. 17 CASCADE</text>
   <text x="105" y="34" text-anchor="middle" class="card-sub">6-Layer Transactional Deletion</text>
-  
+
   <g transform="translate(10, 44)">
     <text x="0" y="10" class="badge" fill="#fb7185">1. Suppression Registry</text>
     <text x="190" y="10" text-anchor="end" class="badge" fill="#64748b">RAM + DB</text>
-    
+
     <text x="0" y="28" class="badge" fill="#fbbf24">2. Bronze Anonymize</text>
     <text x="190" y="28" text-anchor="end" class="badge" fill="#64748b">&lt;anonymized&gt;</text>
-    
+
     <text x="0" y="46" class="badge" fill="#818cf8">3. Silver Hard DELETE</text>
     <text x="190" y="46" text-anchor="end" class="badge" fill="#64748b">Dimension</text>
-    
+
     <text x="0" y="64" class="badge" fill="#34d399">4. Gold Aggregate DELETE</text>
     <text x="190" y="64" text-anchor="end" class="badge" fill="#64748b">C360 / Facts</text>
-    
+
     <text x="0" y="82" class="badge" fill="#f43f5e">5. Fraud Alerts Evacuation</text>
     <text x="190" y="82" text-anchor="end" class="badge" fill="#64748b">Memory + DB</text>
-    
+
     <text x="0" y="100" class="badge" fill="#38bdf8">6. Parquet Lake Re-export</text>
     <text x="190" y="100" text-anchor="end" class="badge" fill="#64748b">Zero Ghost</text>
   </g>
-  
+
   <g transform="translate(10, 150)">
     <rect width="190" height="22" rx="4" fill="#1e293b"/>
     <text x="95" y="14" text-anchor="middle" class="badge" fill="#34d399">SLA &lt; 60s · Hash sha256(id:cust)</text>
@@ -180,7 +180,7 @@
   <rect width="210" height="3" rx="1.5" fill="url(#grad-emerald)"/>
   <text x="105" y="20" text-anchor="middle" class="card-title">GOVERNANCE &amp; OPS</text>
   <text x="105" y="34" text-anchor="middle" class="card-sub">Continuous Compliance Auditing</text>
-  
+
   <g transform="translate(10, 44)">
     <rect width="190" height="24" rx="5" fill="#1e293b"/>
     <text x="8" y="15" class="badge" fill="#34d399">✔ ISO 13616 Mod-97 IBAN</text>

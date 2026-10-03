@@ -12,8 +12,22 @@ The quality gate must pass before any PR merges — CI enforces the same checks:
 1. `ruff check src tests`
 2. `ruff format --check src tests`
 3. `mypy src/eurostream` (strict)
-4. `pytest` 
+4. `pytest`
 5. `eurostream contracts --baseline governance/contracts.json`
+
+## Pre-commit hooks
+
+```bash
+make hooks          # uvx pre-commit install — runs from the repo's own venv
+```
+
+Every commit then gets the hygiene checks (JSON/TOML/YAML validity, private
+keys, merge-conflict markers, trailing whitespace, end-of-file newline) plus
+`ruff --fix` and `ruff format` on the staged files. `mypy` and the event
+contract baseline are wired as **pre-push** hooks: they are the slow ones, and
+they are the same commands the gate runs — no second toolchain to install and
+no drift between what the hooks check and what CI checks. Run the whole set
+over every file at any time with `uvx pre-commit run --all-files`.
 
 ## Tests and coverage
 

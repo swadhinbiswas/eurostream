@@ -221,7 +221,7 @@ The gate is implemented in [`eurostream contracts --baseline governance/contract
 The following diagram describes the intended sequence. The current implementation performs the warehouse steps independently, and the scorer-evacuation item in layer 5 is a design target rather than a wired call.
 
 ```
-[DSAR Intake: POST /erasure-requests] 
+[DSAR Intake: POST /erasure-requests]
    │
    ├──▶ Layer 1: Atomic Suppression Registry (In-Memory Set + governance.suppression_registry in DuckDB/Turso)
    ├──▶ Layer 2: Raw Bronze PII Anonymization (UPDATE bronze.* SET email='<anonymized>', iban='<anonymized>')
@@ -339,7 +339,7 @@ uv run python benchmarks/benchmark_erasure.py
 
 ```
 =======================================================
-       EUROSTREAM GDPR ART. 17 BENCHMARK RESULTS     
+       EUROSTREAM GDPR ART. 17 BENCHMARK RESULTS
 =======================================================
  Iterations Tested : 50
  Mean Latency      : 23.91 ms

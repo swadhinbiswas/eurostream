@@ -1,0 +1,49 @@
+# Run `uvx pre-commit install` once, then every commit is checked.
+# `uvx pre-commit run --all-files` runs the same hooks over everything now.
+#
+# Design: everything that can run out of this repo's venv does, so one
+# `uv sync --dev` is the whole setup — there is no second mypy or ruff to
+# install, and the hooks check the same binaries the quality gate uses.
+# The slow check (mypy, strict, ~15s) is pre-push; the fast ones run on
+# every commit.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-json
+      - id: check-toml
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-symlinks
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        # Two trailing spaces are a hard line break in markdown, not a typo.
+        args: ["--markdown-linebreak-ext=md"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10 # keep in sync with ruff in pyproject
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (strict)
+        entry: uv run mypy src
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]
+      - id: contracts
+        name: event contract baseline
+        entry: uv run eurostream contracts --baseline governance/contracts.json
+        language: system
+        files: ^src/eurostream/models\.py$
+        pass_filenames: false
+        stages: [pre-push]
