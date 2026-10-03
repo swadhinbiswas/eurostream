@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import threading
 import time
@@ -10,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from eurostream.bus import Consumer, Producer
+from eurostream.governance.audit_chain import AuditChain
 from eurostream.metrics import Metrics
 from eurostream.models import ErasureRequested
 from eurostream.warehouse import Warehouse
@@ -72,6 +72,9 @@ class ErasureService:
         self._producer = producer
         self._consumer = consumer
         self._audit_log_path = audit_log_path
+        # Every attestation is written through the hash chain, so the JSONL
+        # trail is tamper-evident (see governance.audit_chain).
+        self._audit_chain = AuditChain(audit_log_path)
         self._metrics = metrics
         self._sla = sla_seconds
         self._on_complete = on_complete
@@ -399,6 +402,11 @@ class ErasureService:
             return False
         return True
 
+    @property
+    def audit_chain(self) -> AuditChain:
+        """The hash chain this service writes attestations into."""
+        return self._audit_chain
+
     def _confirmation_hash(self, request_id: str, customer_id: str) -> str:
         return hashlib.sha256(f"{request_id}:{customer_id}".encode()).hexdigest()[:16]
 
@@ -445,9 +453,10 @@ class ErasureService:
             except Exception as e:
                 logger.warning("Turso audit insert error: %s", e)
         try:
-            self._audit_log_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._audit_log_path.open("a") as fh:
-                fh.write(json.dumps(audit.to_dict()) + "\n")
+            # Links seq/prev_hash/hash onto the previous record, fsyncs, and
+            # rolls its own tip back if the write fails so the next append
+            # does not chain onto a record that never landed.
+            self._audit_chain.link(audit.to_dict())
         except Exception:
             logger.exception("failed to append audit JSONL for %s", audit.request_id)
 

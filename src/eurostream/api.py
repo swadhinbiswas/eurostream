@@ -24,6 +24,7 @@ from eurostream import __version__
 from eurostream.alerts import AlertBroker, format_event, parse_last_event_id
 from eurostream.config import Settings
 from eurostream.dashboard import get_dashboard_html
+from eurostream.governance.audit_chain import verify_audit_log
 from eurostream.governance.erasure import ErasureAudit, ErasureService
 from eurostream.governance.pii import PIIClassifier
 from eurostream.idempotency import (
@@ -566,6 +567,7 @@ def create_app(
             "metrics": "/metrics",
             "prometheus": "/metrics/prometheus",
             "erasure_audit": "/governance/erasure-audit",
+            "erasure_audit_verify": "/governance/erasure-audit/verify",
             "customer_360": "/gold/customer-360",
             "fraud_summary": "/gold/fraud_summary",
             "fraud_alerts": "/fraud_alerts",
@@ -1354,6 +1356,48 @@ def create_app(
         return require_warehouse().query(
             "SELECT * FROM governance.erasure_audit_log ORDER BY completed_at DESC LIMIT 50"
         )
+
+    @app.get("/governance/erasure-audit/verify", tags=["governance"])
+    def verify_erasure_audit(
+        cross_check: bool = Query(
+            default=True,
+            description=(
+                "Also compare the log against governance.erasure_audit_log in "
+                "the warehouse, which catches a truncated or edited tail"
+            ),
+        ),
+    ) -> dict[str, object]:
+        """Verify the tamper-evident audit trail.
+
+        Checks the hash chain over the JSONL log (modified records break their
+        own hash; removed or reordered ones break the link after them) and, by
+        default, that every attestation exists in both copies with the same
+        contents.
+
+        Always answers 200: a failed verification is a finding to act on, not
+        a malformed request. Automation should read ``ok`` (or use
+        ``eurostream verify-audit``, which exits non-zero).
+        """
+        expected: list[dict[str, object]] | None = None
+        db_error: str | None = None
+        if cross_check:
+            try:
+                expected = require_warehouse().query("SELECT * FROM governance.erasure_audit_log")
+            except Exception as exc:  # noqa: BLE001 - report, do not hide
+                db_error = f"warehouse audit table unavailable: {exc}"
+
+        result = verify_audit_log(settings.audit_log_path, expected=expected)
+        errors = list(result.errors)
+        if db_error is not None:
+            errors.append(db_error)
+        payload = result.to_dict()
+        payload["errors"] = errors
+        payload["ok"] = not errors
+        payload["chain"] = {
+            "seq": erasure.audit_chain.seq,
+            "tip": erasure.audit_chain.tip,
+        }
+        return payload
 
     @app.get("/gold/customer-360", tags=["warehouse"])
     def customer_360(
