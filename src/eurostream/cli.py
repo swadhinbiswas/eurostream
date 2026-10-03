@@ -23,6 +23,7 @@ from eurostream.governance.audit_chain import AuditChain, verify_audit_log
 from eurostream.governance.erasure import ErasureAudit, ErasureService
 from eurostream.governance.pii import PIIClassifier
 from eurostream.lineage import LineageEmitter
+from eurostream.loadgen import DEFAULT_PATHS, LoadReport, render, run_load, served, to_dict
 from eurostream.logging import configure_logging
 from eurostream.metrics import Metrics
 from eurostream.models import ErasureRequested
@@ -893,6 +894,64 @@ def chaos(
     if not keep:
         discard_sandbox(sandbox)
     if failed:
+        raise typer.Exit(1)
+
+
+# ------------------------------------------------------------- load test
+
+
+@app.command("load-test")
+def load_test(
+    url: str = typer.Option(
+        "", "--url", "-u", help="Base URL of a server already running (default: start one)"
+    ),
+    count: int = typer.Option(200, "--requests", "-n", min=1, help="Total requests to send"),
+    concurrency: int = typer.Option(16, "--concurrency", "-c", min=1, help="Concurrent workers"),
+    path: list[str] | None = typer.Option(
+        None, "--path", help="Endpoint to hit (repeatable); default: a mix of four"
+    ),
+    timeout: float = typer.Option(10.0, "--timeout", min=0.1, help="Per-request timeout"),
+    json_out: bool = typer.Option(False, "--json", help="Machine-readable report"),
+) -> None:
+    """Drive HTTP load at the API and report latency percentiles.
+
+    Point it at a server with --url, or leave --url out and it starts the
+    app in-process on a free port, measures it, and shuts it down — one
+    command from a cold checkout to a p95. Exits 1 on any 5xx, timeout or
+    transport failure; 429s are counted and reported but never fail a run,
+    because shedding load is the rate limiter working, not the server
+    breaking."""
+    targets = path or list(DEFAULT_PATHS)
+
+    def measure(base: str) -> LoadReport:
+        return run_load(
+            base,
+            requests=count,
+            concurrency=concurrency,
+            paths=targets,
+            timeout=timeout,
+        )
+
+    try:
+        if url:
+            report = measure(url)
+        else:
+            with served() as base:
+                if not json_out:
+                    # In --json mode the base URL is in the payload; an extra
+                    # banner line would make the whole output unparseable.
+                    typer.echo(f"started the API in-process at {base}")
+                report = measure(base)
+    except (ValueError, RuntimeError) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from None
+
+    if json_out:
+        typer.echo(json.dumps(to_dict(report), indent=2))
+    else:
+        typer.echo(render(report))
+
+    if not report.passed:
         raise typer.Exit(1)
 
 
