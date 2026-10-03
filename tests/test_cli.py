@@ -16,7 +16,7 @@ from eurostream.governance.erasure import ErasureService
 from eurostream.metrics import Metrics
 from eurostream.models import ErasureRequested
 from eurostream.portal import build_portal_html
-from eurostream.producers import EventGenerator
+from eurostream.producers import ClickProducer, EventGenerator, OrderProducer, PaymentProducer
 from eurostream.warehouse import Warehouse
 
 runner = CliRunner()
@@ -462,3 +462,169 @@ def test_cli_restore_rejects_an_unusable_snapshot(tmp_path, monkeypatch):
     future = runner.invoke(app, ["restore", str(dest), "--force"])
     assert future.exit_code == 1
     assert "unsupported backup format" in future.output
+
+
+# ------------------------------------------------------------------ replay
+
+
+def _seed_event_log(customers: int = 0, *, extra: tuple[str, ...] = ()) -> None:
+    """Put events on the bus and leave the warehouse for the CLI to build:
+    the exact state `replay` exists to recover from."""
+    settings = get_settings()
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    bus = open_bus(settings.data_dir / "events.db")
+    for i in range(customers):
+        OrderProducer(bus, settings).emit(customer_id=f"cust_replay{i}")
+        ClickProducer(bus, settings).emit(customer_id=f"cust_replay{i}")
+        PaymentProducer(bus, settings).emit(customer_id=f"cust_replay{i}")
+    for customer_id in extra:
+        OrderProducer(bus, settings).emit(customer_id=customer_id)
+    bus.close()
+
+
+def test_cli_replay_builds_every_layer_and_is_repeatable(tmp_path, monkeypatch):
+    _point_cli_at(tmp_path, monkeypatch)
+    _seed_event_log(customers=3)
+    settings = get_settings()
+
+    dry = runner.invoke(app, ["replay", "--dry-run"])
+    assert dry.exit_code == 0, dry.output
+    assert "[dry-run] log holds orders=3 clicks=3 payments=3" in dry.output
+    assert "warehouse untouched" in dry.output
+    warehouse = Warehouse(settings.warehouse_path)  # --dry-run still opens it, but writes nothing
+    assert warehouse.scalar("SELECT count(*) FROM bronze.orders", local_only=True) == 0
+    warehouse.close()
+
+    limited = runner.invoke(app, ["replay", "--dry-run", "--limit", "1"])
+    assert limited.exit_code == 0
+    assert "orders=1 clicks=1 payments=1" in limited.output
+
+    res = runner.invoke(app, ["replay"])
+    assert res.exit_code == 0, res.output
+    assert "read orders=3 clicks=3 payments=3 record(s) from the log" in res.output
+    assert "bronze: 9 rows (+9)" in res.output
+    assert "silver: 9 rows (+9)" in res.output
+    assert "gold: 6 rows (+6)" in res.output
+
+    # Bronze keys on event_id, so a second pass over the same log is a no-op
+    # by construction rather than by special-casing.
+    again = runner.invoke(app, ["replay"])
+    assert again.exit_code == 0, again.output
+    assert again.output.count("(+0)") == 3
+
+    laked = runner.invoke(app, ["replay", "--lake"])
+    assert laked.exit_code == 0, laked.output
+    assert f"lake re-exported to {settings.lake_root}" in laked.output
+
+
+def test_cli_replay_never_resurrects_a_suppressed_customer(tmp_path, monkeypatch):
+    _point_cli_at(tmp_path, monkeypatch)
+    _seed_event_log(extra=("cust_gone", "cust_kept"))
+    settings = get_settings()
+    assert runner.invoke(app, ["replay"]).exit_code == 0
+
+    # Exercise Art. 17 the normal way, then lose the erased rows from Bronze.
+    bus = open_bus(settings.data_dir / "events.db")
+    warehouse = Warehouse(settings.warehouse_path)
+    erasure = ErasureService(
+        warehouse=warehouse,
+        producer=bus,
+        consumer=bus.consumer("erasure_requests", "replay-test", auto_offset_reset="earliest"),
+        audit_log_path=settings.audit_log_path,
+        metrics=Metrics(),
+        sla_seconds=60,
+    )
+    erasure.execute(
+        ErasureRequested(
+            event_id="req-gone",
+            occurred_at=time.time(),
+            request_id="req-gone",
+            customer_id="cust_gone",
+        )
+    )
+    warehouse.conn.execute("DELETE FROM bronze.orders WHERE customer_id = 'cust_gone'")
+    warehouse.close()
+    bus.close()
+
+    res = runner.invoke(app, ["replay"])
+    assert res.exit_code == 0, res.output
+    assert "1 skipped for suppressed customers" in res.output
+
+    warehouse = Warehouse(settings.warehouse_path)
+    # The log still holds the raw event — replay is what must not re-ingest it.
+    assert (
+        warehouse.scalar(
+            "SELECT count(*) FROM bronze.orders WHERE customer_id = 'cust_gone'", local_only=True
+        )
+        == 0
+    )
+    assert (
+        warehouse.scalar(
+            "SELECT count(*) FROM silver.customers WHERE customer_id = 'cust_gone'",
+            local_only=True,
+        )
+        == 0
+    )
+    assert (
+        warehouse.scalar(
+            "SELECT count(*) FROM gold.customer_360 WHERE customer_id = 'cust_gone'",
+            local_only=True,
+        )
+        == 0
+    )
+    # The customer who never asked to be erased is untouched.
+    assert (
+        warehouse.scalar(
+            "SELECT count(*) FROM bronze.orders WHERE customer_id = 'cust_kept'", local_only=True
+        )
+        == 1
+    )
+    warehouse.close()
+
+
+def test_cli_replay_warns_when_the_suppression_registry_itself_is_gone(tmp_path, monkeypatch):
+    _point_cli_at(tmp_path, monkeypatch)
+    _seed_event_log(extra=("cust_gone", "cust_kept"))
+    settings = get_settings()
+    assert runner.invoke(app, ["replay"]).exit_code == 0
+
+    bus = open_bus(settings.data_dir / "events.db")
+    warehouse = Warehouse(settings.warehouse_path)
+    erasure = ErasureService(
+        warehouse=warehouse,
+        producer=bus,
+        consumer=bus.consumer("erasure_requests", "replay-test2", auto_offset_reset="earliest"),
+        audit_log_path=settings.audit_log_path,
+        metrics=Metrics(),
+        sla_seconds=60,
+    )
+    erasure.execute(
+        ErasureRequested(
+            event_id="req-gone2",
+            occurred_at=time.time(),
+            request_id="req-gone2",
+            customer_id="cust_gone",
+        )
+    )
+    # Now lose the governance tables with the data: the one case where a
+    # replay from the log genuinely cannot honour Art. 17 on its own.
+    warehouse.conn.execute("DELETE FROM governance.suppression_registry")
+    warehouse.conn.execute("DELETE FROM bronze.orders")
+    warehouse.conn.execute("DELETE FROM silver.orders")
+    warehouse.close()
+    bus.close()
+
+    res = runner.invoke(app, ["replay"])
+    assert res.exit_code == 0, res.output
+    assert "WARNING: the suppression registry is empty" in res.output
+    assert "eurostream restore" in res.output
+    # The warning is not decoration: the raw row really is back, which is
+    # exactly why `backup restore` is the recommended path here.
+    warehouse = Warehouse(settings.warehouse_path)
+    assert (
+        warehouse.scalar(
+            "SELECT count(*) FROM bronze.orders WHERE customer_id = 'cust_gone'", local_only=True
+        )
+        == 1
+    )
+    warehouse.close()

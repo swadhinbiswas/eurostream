@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import typer
 
@@ -706,6 +707,128 @@ def restore(
         "is intact in both copies",
         fg=typer.colors.GREEN,
     )
+
+
+# ----------------------------------------------------------------- replay
+REPLAY_TOPICS = ("orders", "clicks", "payments")
+#: Layer totals reported by a replay. Governance tables are absent by
+#: design: replay rebuilds data, it never rewrites audit or suppression
+#: state — that is `backup restore`'s job.
+REPLAY_LAYERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("bronze", ("bronze.orders", "bronze.clicks", "bronze.payments")),
+    ("silver", ("silver.customers", "silver.orders", "silver.payments")),
+    ("gold", ("gold.customer_360", "gold.order_facts", "gold.fraud_summary")),
+)
+
+
+def _layer_totals(warehouse: Warehouse) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for layer, tables in REPLAY_LAYERS:
+        total = 0
+        for table in tables:
+            try:
+                total += int(
+                    warehouse.scalar(f"SELECT count(*) FROM {_safe_table(table)}", local_only=True)  # noqa: S608
+                )
+            except Exception as exc:  # noqa: BLE001 - a missing table counts as zero rows
+                logging.getLogger(__name__).debug("replay could not count %s: %s", table, exc)
+        totals[layer] = total
+    return totals
+
+
+@app.command()
+def replay(
+    limit: int = typer.Option(
+        0, min=0, help="Stop after N records per topic (0 = read to the end)"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Report what the log holds without touching the warehouse"
+    ),
+    lake: bool = typer.Option(
+        False, "--lake", help="Re-export the de-identified lake after the rebuild"
+    ),
+) -> None:
+    """Rebuild Bronze from the event log, then rebuild Silver and Gold.
+
+    The log, not the warehouse, is the source of truth here: each topic is
+    read from the front by a throwaway consumer group that never commits,
+    so no worker's or operator's cursor moves and the run is repeatable.
+    Bronze keys on event_id with INSERT OR IGNORE, so replaying events the
+    warehouse already holds changes nothing — safe against a live warehouse
+    after a bad transform, and a full recovery against an emptied one.
+
+    Erasure survives a replay: records for suppressed customers are skipped
+    rather than re-ingested, and Silver/Gold rebuilds filter through the
+    suppression registry as they always do. When that registry is itself
+    empty — a warehouse lost, not just wiped — the run says so instead of
+    quietly resurrecting people the log still remembers."""
+    settings, bus, warehouse, _, _ = _fresh()
+
+    suppressed: set[str] = set()
+    try:
+        suppressed = {
+            str(row["customer_id"])
+            for row in warehouse.query(
+                "SELECT customer_id FROM governance.suppression_registry", local_only=True
+            )
+        }
+    except Exception as exc:  # noqa: BLE001 - unreadable registry degrades to "empty"
+        logging.getLogger(__name__).debug("suppression registry unreadable: %s", exc)
+
+    before = _layer_totals(warehouse)
+    read: dict[str, int] = {}
+    skipped = 0
+    for topic in REPLAY_TOPICS:
+        consumer = bus.consumer(topic, f"replay-{uuid4()}", auto_offset_reset="earliest")
+        records: list[Record] = []
+        while not limit or len(records) < limit:
+            record = consumer.poll(0.1)
+            if record is None:
+                break
+            if suppressed:
+                try:
+                    if str(record.json_value().get("customer_id", "")) in suppressed:
+                        skipped += 1
+                        continue
+                except Exception as exc:  # noqa: BLE001 - a malformed body is load's problem
+                    logging.getLogger(__name__).debug("replay could not read a record: %s", exc)
+            records.append(record)
+        # Deliberately never closed: close() commits, and this group exists
+        # only to read from the front of the log.
+        read[topic] = len(records)
+        if not dry_run and records:
+            warehouse.load_bronze_from_records(topic, records)
+
+    summary = " ".join(f"{topic}={count}" for topic, count in read.items())
+    if dry_run:
+        typer.echo(f"[dry-run] log holds {summary} record(s); warehouse untouched")
+        if skipped:
+            typer.echo(f"[dry-run] {skipped} record(s) belong to suppressed customers")
+        warehouse.close()
+        bus.close()
+        return
+
+    warehouse.build_silver()
+    warehouse.build_gold()
+    if lake:
+        warehouse.export_lake(settings.lake_root)
+
+    after = _layer_totals(warehouse)
+    suffix = f" ({skipped} skipped for suppressed customers)" if skipped else ""
+    typer.echo(f"read {summary} record(s) from the log{suffix}")
+    for layer, _tables in REPLAY_LAYERS:
+        typer.echo(f"  {layer}: {after[layer]} rows ({after[layer] - before[layer]:+d})")
+    if lake:
+        typer.echo(f"lake re-exported to {settings.lake_root}")
+    if not suppressed and any(read.values()):
+        typer.secho(
+            "WARNING: the suppression registry is empty, so anyone erased before this "
+            "rebuild would come straight back. Restore a snapshot instead "
+            "(eurostream restore <dir> --force) — it carries the governance tables with it.",
+            fg=typer.colors.YELLOW,
+        )
+    warehouse.close()
+    bus.close()
 
 
 # ------------------------------------------------------------------- dlq
