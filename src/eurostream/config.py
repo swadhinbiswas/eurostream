@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -123,6 +124,15 @@ class Settings(BaseSettings):
             "When set, every mutating endpoint requires "
             "`Authorization: Bearer <token>`; reads stay public."
         ),
+    )
+
+    log_level: str = Field(
+        default="INFO",
+        description="Python logging level (DEBUG, INFO, WARNING, ERROR, ...)",
+    )
+    log_format: Literal["text", "json"] = Field(
+        default="text",
+        description="text for a terminal, json (one object per line) for a log drain",
     )
 
 

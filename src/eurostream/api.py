@@ -23,6 +23,7 @@ from eurostream.dashboard import get_dashboard_html
 from eurostream.governance.erasure import ErasureAudit, ErasureService
 from eurostream.governance.pii import PIIClassifier
 from eurostream.lineage import LineageEmitter
+from eurostream.logging import configure_logging, reset_request_id, set_request_id
 from eurostream.metrics import Metrics
 from eurostream.models import ErasureRequested
 from eurostream.orchestration import DAG, DAGTask
@@ -31,7 +32,6 @@ from eurostream.quality import DataQualityEngine
 from eurostream.streaming import FraudScorer, FraudStreamProcessor
 from eurostream.warehouse import Warehouse
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 PROBLEM_MEDIA_TYPE = "application/problem+json"
@@ -214,6 +214,9 @@ def create_app(
     """
     effective_backend = backend or _bus_backend(bus)
     requested_backend = settings.event_bus_backend
+    # Format every EuroStream line the way this deployment wants it before the
+    # first log fires (lifespan, worker, request handlers).
+    configure_logging(settings.log_level, settings.log_format)
     degraded = effective_backend != requested_backend
     if degraded:
         logger.warning(
@@ -273,9 +276,15 @@ def create_app(
     async def request_id_middleware(request: Request, call_next: Any) -> Any:
         rid = request.headers.get(REQUEST_ID_HEADER) or uuid.uuid4().hex
         request.state.request_id = rid
-        started = time.perf_counter()
-        response = await call_next(request)
-        elapsed = time.perf_counter() - started
+        # Bind the correlation id for everything logged while this request is
+        # in scope — including the sync endpoints running on worker threads.
+        token = set_request_id(rid)
+        try:
+            started = time.perf_counter()
+            response = await call_next(request)
+            elapsed = time.perf_counter() - started
+        finally:
+            reset_request_id(token)
         response.headers[REQUEST_ID_HEADER] = rid
 
         # Label by the *route template* (from the matched route, not the raw
@@ -290,6 +299,22 @@ def create_app(
                 "method": request.method,
                 "path": path_label,
                 "status": str(response.status_code),
+            },
+        )
+        # Structured access line: the request id in this record matches the
+        # response header and every log line emitted while handling it. It is
+        # passed explicitly because this line runs after the scope is reset.
+        logger.info(
+            "%s %s -> %s",
+            request.method,
+            path_label,
+            response.status_code,
+            extra={
+                "request_id": rid,
+                "method": request.method,
+                "path": path_label,
+                "status": response.status_code,
+                "duration_ms": round(elapsed * 1000, 3),
             },
         )
         return response

@@ -16,6 +16,7 @@ from eurostream.contracts import ContractRegistry
 from eurostream.governance.erasure import ErasureAudit, ErasureService
 from eurostream.governance.pii import PIIClassifier
 from eurostream.lineage import LineageEmitter
+from eurostream.logging import configure_logging
 from eurostream.metrics import Metrics
 from eurostream.models import ErasureRequested
 from eurostream.orchestration import DAG, DAGRunError, DAGTask, TaskResult
@@ -28,16 +29,17 @@ from eurostream.quality import DataQualityEngine
 from eurostream.streaming import FraudScorer, FraudStreamProcessor
 from eurostream.warehouse import Warehouse
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+# Importing the CLI must not configure the host process's logging; every
+# entrypoint calls configure_logging() explicitly with its own settings.
+configure_logging()
 
 app = typer.Typer(help="EuroStream — GDPR-compliant real-time analytics platform")
 
 
 def _fresh() -> tuple[Settings, Any, Warehouse, Metrics, PIIClassifier]:
     settings = get_settings()
+    # Re-apply with this deployment's EUROSTREAM_LOG_* overrides.
+    configure_logging(settings.log_level, settings.log_format)
     for p in [settings.data_dir, settings.lake_root, settings.audit_log_path.parent]:
         p.mkdir(parents=True, exist_ok=True)
     # Factory: sqlite (local, zero deps) vs kafka (Aiven, SASL_SSL).
@@ -48,8 +50,6 @@ def _fresh() -> tuple[Settings, Any, Warehouse, Metrics, PIIClassifier]:
 
             bus: Any = KafkaBus(settings)
         except (ImportError, ModuleNotFoundError, ValueError) as e:
-            import logging
-
             logging.getLogger(__name__).warning(
                 "Kafka requested but unavailable (%s) — using SQLite", e
             )
