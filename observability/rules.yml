@@ -1,0 +1,134 @@
+# Alert rules for EuroStream.
+#
+# Every expression names a series /metrics/prometheus actually emits: an
+# alert that points at a metric which never appears looks like coverage and
+# fires nothing, which is worse than having no alert at all. The contract is
+# enforced by tests/test_observability.py, which parses this file and checks
+# each eurostream_* identifier against the metric table.
+#
+# Latency alerts use the summary's _sum/_count pair: EuroStream exports
+# http_request_duration_seconds as a summary (count/sum/max, no buckets), so
+# a mean over a window is the honest number — a quantile from a summary
+# without buckets would be invented, not measured.
+groups:
+  - name: eurostream-availability
+    interval: 30s
+    rules:
+      - alert: EurostreamDown
+        expr: eurostream_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "EuroStream is no longer exporting metrics"
+          description: "The scrape target stopped answering /metrics/prometheus for 2 minutes."
+          runbook: "docker compose --profile observe ps; docker compose logs api --tail 100"
+
+      - alert: ErrorBudgetBurningTooFast
+        # 1.0 = burning exactly as fast as the SLO allows.
+        expr: eurostream_http_error_budget_burn_rate > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "5xx traffic is consuming the error budget faster than the SLO allows"
+          description: "Burn rate has been above 1.0 for 5 minutes over the 300s window."
+          runbook: "Check the last deploy, then /governance/erasure-audit/verify and recent 5xx paths."
+
+      - alert: ErrorBudgetNearlyExhausted
+        expr: eurostream_http_error_budget_remaining < 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Less than 10% of the rolling error budget remains"
+          description: "The 300s window has less than a tenth of its budget left."
+          runbook: "Freeze non-essential releases until the window rolls over."
+
+      - alert: HttpLatencyDegrading
+        expr: |
+          (
+            increase(eurostream_http_request_duration_seconds_sum[5m])
+            / clamp_min(increase(eurostream_http_request_duration_seconds_count[5m]), 1)
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mean HTTP time spent serving is above 1s"
+          description: "Derived from the duration summary's _sum/_count over 5 minutes."
+          runbook: "eurostream load-test --requests 200 to reproduce, then check warehouse reads."
+
+  - name: eurostream-gdpr
+    interval: 30s
+    rules:
+      - alert: ErasureQueueNotDraining
+        expr: eurostream_erasure_queue_depth > 25
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Accepted right-to-erasure requests are piling up"
+          description: "More than 25 accepted-but-unfinished requests for 10 minutes."
+          runbook: "Is the worker running? Then check the DLQ: eurostream dlq list --check"
+
+      - alert: ErasureSlaBreached
+        expr: increase(eurostream_erasure_sla_breach_total[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "A right-to-erasure request finished after the documented SLA"
+          description: "One or more completions exceeded EUROSTREAM_ERASURE_SLA_SECONDS."
+          runbook: "GET /governance/erasure-audit/verify and the pending queue in /stats."
+
+      - alert: ErasureWorkerFailing
+        expr: increase(eurostream_erasure_worker_failures_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "An erasure execution raised and was dead-lettered"
+          runbook: "eurostream dlq list --json  # then fix and eurostream dlq requeue"
+
+      - alert: ErasureRequestsMalformed
+        expr: increase(eurostream_malformed_erasure_requests_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unparseable records arrived on erasure_requests"
+          runbook: "eurostream dlq list — the producer that wrote them needs a schema fix."
+
+  - name: eurostream-ingest
+    interval: 30s
+    rules:
+      - alert: MalformedEventsArriving
+        expr: increase(eurostream_malformed_events_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bus records are being dropped as unparseable"
+          runbook: "Compare the producer's schema_version with the contract: eurostream contracts"
+
+      - alert: RateLimiterSheddingLoad
+        # Not a failure: the token bucket doing its job. Page only when it
+        # happens continuously, because sustained shedding means traffic
+        # the deployment was never sized for.
+        expr: rate(eurostream_rate_limited_requests_total[5m]) > 0.5
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "The rate limiter has been shedding requests for 10 minutes"
+          runbook: "eurostream load-test -n 500 -c 32 to see the shape; raise the limit if intended."
+
+  - name: eurostream-live-feed
+    interval: 30s
+    rules:
+      - alert: AlertFeedSilent
+        expr: |
+          increase(eurostream_alert_stream_events_total[30m]) == 0
+          and increase(eurostream_alert_streams_opened_total[30m]) > 0
+        labels:
+          severity: info
+        annotations:
+          summary: "Clients are connected to the SSE feed but no frames are being delivered"
+          runbook: "Check the fraud worker: eurostream worker --help and the /stream endpoint."

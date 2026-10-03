@@ -1,4 +1,4 @@
-.PHONY: help sync lint fmt fmt-check type test coverage contract serve load demo docker-build docker-smoke site-install site-dev site-build site-deploy gate
+.PHONY: help sync lint fmt fmt-check type test coverage contract serve load observe observe-down demo docker-build docker-smoke site-install site-dev site-build site-deploy gate
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -32,6 +32,12 @@ serve: ## Run the API server on http://127.0.0.1:7860
 
 load: ## Fire HTTP load at an in-process server and report percentiles
 	uv run eurostream load-test
+
+observe: ## Start api + Prometheus + Grafana (http://localhost:3000)
+	docker compose --profile observe up -d
+
+observe-down: ## Stop the observability stack, keep its data
+	docker compose --profile observe down
 
 demo: ## Run the end-to-end pipeline demo
 	uv run eurostream demo

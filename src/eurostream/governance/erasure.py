@@ -120,6 +120,8 @@ class ErasureService:
                 status="queued",
                 requested_by=requested_by,
             )
+        # Outside the lock: the gauge reads _pending under it itself.
+        self._publish_queue_depth()
         return evt.request_id
 
     def execute(self, event: ErasureRequested) -> ErasureAudit:
@@ -207,6 +209,10 @@ class ErasureService:
         # SLA is end-to-end from request time, not worker start, so queue time counts.
         latency = audit.completed_at - audit.requested_at
         self._metrics.observe("erasure_latency", latency)
+        # A cascade that finished. The lake export failure, when it happens,
+        # has its own counter — this one is "did the erasure complete", and
+        # until it was wired up it existed only as HELP text.
+        self._metrics.incr("erasure_completed")
         if latency > self._sla:
             self._metrics.incr("erasure_sla_breach")
             logger.warning(
@@ -257,6 +263,9 @@ class ErasureService:
         """
         logger.info("erasure worker started")
         while stop_event is None or not stop_event.is_set():
+            # Requests may have been accepted by another process, so the
+            # depth is republished from the source of truth every loop.
+            self._publish_queue_depth()
             record = self._consumer.poll(poll_timeout)
             if record is None:
                 time.sleep(0.05)
@@ -332,6 +341,19 @@ class ErasureService:
     def _pop_pending(self, request_id: str) -> None:
         with self._lock:
             self._pending.pop(request_id, None)
+        self._publish_queue_depth()
+
+    def _publish_queue_depth(self) -> None:
+        """Publish accepted-but-unfinished requests as a gauge.
+
+        Called at intake, at completion and on every worker loop, so the
+        number falls back to 0 as the queue drains instead of sticking at
+        its high-water mark — and so a queue filled by *another* process
+        still shows up here. An operator can then tell an idle queue from a
+        stuck one without reading a log."""
+        with self._lock:
+            depth = len(self._pending)
+        self._metrics.set_gauge("erasure_queue_depth", float(depth))
 
     def _anonymize_warehouse(self, customer_id: str) -> bool:
         """Anonymize Bronze and delete the customer from Silver/Gold.

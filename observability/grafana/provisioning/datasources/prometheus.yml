@@ -1,0 +1,15 @@
+# Provisioned Prometheus datasource. `prometheus` is the compose service
+# name, so no URL is configurable here on purpose — the datasource and the
+# scrape target come from the same network.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 10s # match the scrape interval, so rate() windows align

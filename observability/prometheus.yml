@@ -1,0 +1,25 @@
+# Prometheus scrape configuration for EuroStream.
+#
+# Mounted read-only into the `prometheus` service in ../docker-compose.yml
+# (`docker compose --profile observe up`). The API exposes the standard text
+# exposition format at /metrics/prometheus, so no exporter sidecar is needed.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # Also mounted; alert names here are checked against the metrics the app
+  # actually emits by tests/test_observability.py.
+  - /etc/prometheus/rules.yml
+
+scrape_configs:
+  - job_name: eurostream
+    metrics_path: /metrics/prometheus
+    # The error budget is computed over a rolling 300s window at scrape
+    # time, so scraping slower than that would show a budget that is
+    # already stale when someone looks at it.
+    scrape_interval: 10s
+    static_configs:
+      - targets: ["api:7860"]
+        labels:
+          service: eurostream

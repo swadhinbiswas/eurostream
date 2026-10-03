@@ -9,6 +9,8 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
+from eurostream import __version__
+
 logger = logging.getLogger(__name__)
 
 # Every metric this process exposes is namespaced so it never collides with
@@ -36,6 +38,12 @@ _HELP = {
     "alert_streams_opened": "Server-Sent Event connections opened on the live alert feed.",
     "alert_stream_events": "Alert frames delivered over the live SSE feed.",
     "idempotent_replays": "Erasure POSTs answered from the idempotency cache.",
+    "malformed_events": "Bus records dropped as unparseable.",
+    "suppressed_for_erasure": ("Fraud scores suppressed because the customer asked to be erased."),
+    "erasure_worker_failures": "Erasure executions that raised and were dead-lettered.",
+    "erasure_lake_export_failed": (
+        "Completed erasures whose lake re-export failed (the cascade still finished)."
+    ),
     "idempotency_conflicts": "Erasure POSTs rejected for reusing a key on another customer.",
     "http_success_ratio": "Share of requests in the rolling window that were not 5xx.",
     "http_error_budget_burn_rate": (
@@ -130,7 +138,11 @@ class Metrics:
         self._slo_window = float(slo_window_seconds)
         # Baseline series: a scrape must never come back empty, even before
         # the first request, otherwise monitoring reads it as a dead exporter.
-        self._gauges[_series_key("up", None)] = 1.0
+        self.set_gauge("up", 1.0)
+        # Prometheus convention: build info is a gauge pinned at 1 with the
+        # build's identity in labels, so `eurostream_build_info` can be used
+        # to join a dashboard or an alert to the version that emitted it.
+        self.set_gauge("build_info", 1.0, {"version": __version__})
 
     def incr(self, name: str, amount: int = 1, labels: dict[str, str] | None = None) -> None:
         key = _series_key(name, labels)

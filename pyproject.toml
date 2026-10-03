@@ -41,6 +41,9 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.5",
     "mypy>=1.10",
+    # tests/test_observability.py parses the Prometheus and Grafana config;
+    # declaring it instead of leaning on a transitive dependency.
+    "pyyaml>=6",
 ]
 
 [project.scripts]

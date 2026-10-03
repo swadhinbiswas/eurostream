@@ -1,0 +1,16 @@
+# Dashboards loaded from files at startup and rescanned every 30s, so an
+# edit to dashboards/eurostream.json shows up without a container restart.
+apiVersion: 1
+
+providers:
+  - name: EuroStream
+    orgId: 1
+    folder: EuroStream
+    folderUid: eurostream
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
