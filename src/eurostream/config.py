@@ -177,6 +177,15 @@ class Settings(BaseSettings):
             "since the previous quality run"
         ),
     )
+    dq_k_anonymity: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        description=(
+            "Smallest quasi-identifier group a quality check will accept; "
+            "1 reports the observed minimum without failing anything"
+        ),
+    )
 
 
 @lru_cache

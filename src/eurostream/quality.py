@@ -101,12 +101,23 @@ class DataQualityEngine:
     #: "a transform silently wiped a table" failure mode.
     VOLUME_TABLES = tuple(FRESHNESS_COLUMNS)
 
+    #: Table -> the quasi-identifiers that must not single a person out.
+    #: Every grouping column has to identify a human indirectly (where they
+    #: live, whether they opted in) for the grouping to be worth doing.
+    ANONYMITY_GROUPS: dict[str, tuple[str, ...]] = {
+        "silver.customers": ("country", "marketing_consent"),
+        "silver.orders": ("country",),
+        "silver.payments": ("country",),
+        "gold.customer_360": ("marketing_consent",),
+    }
+
     def __init__(
         self,
         warehouse: Warehouse,
         *,
         freshness_seconds: float = 3600.0,
         volume_drop_pct: float = 50.0,
+        k_anonymity: int = 1,
     ) -> None:
         self._warehouse = warehouse
         #: A layer whose newest event is older than this is stalled, not
@@ -116,6 +127,11 @@ class DataQualityEngine:
         #: is a *relative* limit: baseline, growth and small erasures pass,
         #: a table that lost more than half of itself does not.
         self._volume_drop_pct = float(volume_drop_pct)
+        #: Smallest number of distinct customers a quasi-identifier group
+        #: must hold. 1 (the default) reports the observed minimum without
+        #: failing anything: a fresh platform cannot promise anonymity it
+        #: does not yet have data for, but it can publish the number.
+        self._k = int(k_anonymity)
 
     def run_all(self) -> DQReport:
         report = DQReport(run_id=str(uuid.uuid4()))
@@ -148,6 +164,7 @@ class DataQualityEngine:
             ("suppression_enforced", self._check_suppression_enforced),
             ("freshness", self._check_freshness),
             ("volume", self._check_volume),
+            ("anonymity", self._check_k_anonymity),
         ]
         for name, check in groups:
             try:
@@ -434,6 +451,53 @@ class DataQualityEngine:
                     name,
                     True,
                     f"{_VOLUME_PREFIX}{current} (was {previous}, {change:+.0f}%)",
+                )
+            )
+        return results
+
+    def _check_k_anonymity(self) -> list[DQCheckResult]:
+        """Does any quasi-identifier group single a person out?
+
+        For each grouping (country, consent, ...) count the *distinct*
+        customers in it and take the smallest group: a group of one means
+        someone's rows can be tied back to them by combination alone, which
+        is the re-identification risk k-anonymity exists to measure. The
+        verdict is ``smallest >= k`` — with the default k of 1 the check
+        still runs and still reports the number, it simply refuses to fail a
+        platform for being young.
+        """
+        results: list[DQCheckResult] = []
+        for table, columns in self.ANONYMITY_GROUPS.items():
+            name = f"anonymity.{table}"
+            _safe_identifier(table)
+            for column in columns:
+                _safe_identifier(column)
+            group_by = ", ".join(columns)
+            try:
+                rows = self._warehouse.query(
+                    f"SELECT min(members) AS smallest, count(*) AS n_groups FROM ("  # noqa: S608
+                    f"SELECT {group_by}, count(distinct customer_id) AS members "
+                    f"FROM {table} GROUP BY {group_by}) g",
+                    local_only=True,
+                )
+            except Exception as exc:  # noqa: BLE001 - a broken check is a failed check
+                results.append(
+                    DQCheckResult(name, False, f"check could not run: {type(exc).__name__}: {exc}")
+                )
+                continue
+
+            row = rows[0] if rows else {}
+            if row.get("smallest") is None:
+                results.append(DQCheckResult(name, True, "empty — no groups to be re-identified"))
+                continue
+            smallest_int = _count(row, "smallest")
+            n_groups = _count(row, "n_groups")
+            results.append(
+                DQCheckResult(
+                    name,
+                    smallest_int >= self._k,
+                    f"smallest group of ({group_by}) holds {smallest_int} distinct "
+                    f"customer(s) across {n_groups} group(s); k={self._k}",
                 )
             )
         return results

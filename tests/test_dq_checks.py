@@ -182,6 +182,64 @@ def test_volume_drop_threshold_is_configurable(warehouse, settings):
     assert "dropped more than 10%" in str(check.detail)
 
 
+# -------------------------------------------------------------- anonymity
+
+
+def _build_with_quasi_identifiers(warehouse: Warehouse, settings: Settings) -> None:
+    """3 customers in LU, 2 in DE, 1 in MT: a singleton group, which is
+    exactly what k-anonymity exists to notice."""
+    gen = EventGenerator(settings)
+    for i in range(3):
+        warehouse.append_order(gen.order(customer_id=f"cust_lu{i}", consent=True))
+    for i in range(2):
+        warehouse.append_order(gen.order(customer_id=f"cust_de{i}", consent=True))
+    warehouse.append_order(gen.order(customer_id="cust_mt0", consent=True))
+    for prefix, country in (("cust_lu", "LU"), ("cust_de", "DE")):
+        warehouse.conn.execute(
+            "UPDATE bronze.orders SET country = ? WHERE customer_id LIKE ?",  # noqa: S608
+            (country, f"{prefix}%"),
+        )
+    warehouse.conn.execute("UPDATE bronze.orders SET country = 'MT' WHERE customer_id = 'cust_mt0'")
+    warehouse.build_silver()
+    warehouse.build_gold()
+
+
+def test_k_anonymity_reports_the_smallest_group_without_failing(warehouse, settings):
+    _build_with_quasi_identifiers(warehouse, settings)
+    report = DataQualityEngine(warehouse).run_all()
+
+    anonymity = _named(report, "anonymity.")
+    assert set(anonymity) == {f"anonymity.{t}" for t in DataQualityEngine.ANONYMITY_GROUPS}
+    # k=1: nothing can hold fewer than one member, so the verdict is "pass"
+    # and the *number* is what the report carries away with it.
+    assert all(r.passed for r in anonymity.values())
+    detail = str(anonymity["anonymity.silver.customers"].detail)
+    assert "holds 1 distinct customer(s)" in detail
+    assert "k=1" in detail
+    assert report.all_passed
+
+
+def test_k_anonymity_fails_a_singleton_group_when_k_is_raised(warehouse, settings):
+    _build_with_quasi_identifiers(warehouse, settings)
+    report = DataQualityEngine(warehouse, k_anonymity=2).run_all()
+
+    anonymity = _named(report, "anonymity.")
+    failing = {name for name, r in anonymity.items() if not r.passed}
+    # MT holds one customer: identifiable by (country, consent) alone.
+    assert failing == {"anonymity.silver.customers", "anonymity.silver.orders"}
+    assert "k=2" in str(anonymity["anonymity.silver.customers"].detail)
+    # Gold groups by consent alone — one group of six, comfortably above k.
+    assert anonymity["anonymity.gold.customer_360"].passed
+    assert not report.all_passed
+
+
+def test_k_anonymity_skips_tables_that_hold_no_rows(warehouse):
+    report = DataQualityEngine(warehouse, k_anonymity=5).run_all()
+    anonymity = _named(report, "anonymity.")
+    assert anonymity and all(r.passed for r in anonymity.values())
+    assert all("empty" in str(r.detail) for r in anonymity.values())
+
+
 def test_volume_check_survives_a_dropped_table(warehouse, settings):
     """A check that raises is recorded as a failed check, never lost — a
     missing table must not take the rest of the report down with it."""
@@ -202,8 +260,11 @@ def test_settings_expose_the_quality_thresholds() -> None:
     settings = Settings()
     assert settings.dq_freshness_seconds == 3600.0
     assert settings.dq_volume_drop_pct == 50.0
+    assert settings.dq_k_anonymity == 1
 
     with pytest.raises(ValidationError):
         Settings(dq_volume_drop_pct=150)
     with pytest.raises(ValidationError):
         Settings(dq_freshness_seconds=0)
+    with pytest.raises(ValidationError):
+        Settings(dq_k_anonymity=0)

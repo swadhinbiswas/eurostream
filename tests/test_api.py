@@ -126,6 +126,7 @@ def test_concurrent_quality_gate_is_isolated(tmp_path):
     # The thresholds the verdict was judged against travel with the report.
     assert {g["thresholds"]["freshness_seconds"] for g in gate} == {3600.0}
     assert {g["thresholds"]["volume_drop_pct"] for g in gate} == {50.0}
+    assert {g["thresholds"]["k_anonymity"] for g in gate} == {1}
     assert len({str(g) for g in gold}) == 1, "gold.customer-360 answers diverged under concurrency"
     for c in clients:
         c.close()

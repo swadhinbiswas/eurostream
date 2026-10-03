@@ -254,6 +254,7 @@ def transform(
             warehouse,
             freshness_seconds=settings.dq_freshness_seconds,
             volume_drop_pct=settings.dq_volume_drop_pct,
+            k_anonymity=settings.dq_k_anonymity,
         ).run_all()
         if not report.all_passed:
             failed = [r.check_name for r in report.results if not r.passed]
@@ -691,6 +692,7 @@ def _quality_gate(warehouse: Warehouse) -> Callable[[], None]:
             warehouse,
             freshness_seconds=settings.dq_freshness_seconds,
             volume_drop_pct=settings.dq_volume_drop_pct,
+            k_anonymity=settings.dq_k_anonymity,
         ).run_all()
         if not report.all_passed:
             failed = [r.check_name for r in report.results if not r.passed]
